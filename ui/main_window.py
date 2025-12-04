@@ -15,6 +15,7 @@ from ui.widgets.training_widget import TrainingWidget
 from ui.widgets.metrics_widget import MetricsWidget
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.export_dialog import ExportDialog
+from ui.dialogs.split_dataset_dialog import SplitDatasetDialog
 
 from core.dataset_manager import DatasetManager
 from core.label_manager import LabelManager, BoundingBox, Polygon
@@ -345,15 +346,54 @@ class MainWindow(QMainWindow):
     def split_dataset(self):
         """Split dataset into train/val/test"""
         if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning", "Please create or open a project first")
             return
 
-        stats = self.dataset_manager.split_dataset()
-        QMessageBox.information(
-            self, "Split Complete",
-            f"Train: {stats.get('train', 0)}\n"
-            f"Val: {stats.get('val', 0)}\n"
-            f"Test: {stats.get('test', 0)}"
-        )
+        # Check if there are images to split
+        self.dataset_manager.refresh_images_list()
+        if not self.dataset_manager.images_list:
+            QMessageBox.warning(
+                self,
+                "No Images",
+                "No images found in the project.\n\n"
+                "Please import images first using File → Import Images"
+            )
+            return
+
+        # Show split configuration dialog
+        dialog = SplitDatasetDialog(self)
+        if dialog.exec() != SplitDatasetDialog.DialogCode.Accepted:
+            return
+
+        # Get selected ratios
+        ratios = dialog.get_ratios()
+
+        # Perform split
+        try:
+            stats = self.dataset_manager.split_dataset(ratios)
+
+            # Show success message
+            total_images = sum(stats.values())
+            QMessageBox.information(
+                self, "Split Complete",
+                f"Successfully split {total_images} images:\n\n"
+                f"Train: {stats.get('train', 0)} ({int(ratios['train']*100)}%)\n"
+                f"Val: {stats.get('val', 0)} ({int(ratios['val']*100)}%)\n"
+                f"Test: {stats.get('test', 0)} ({int(ratios['test']*100)}%)\n\n"
+                f"Images have been copied to train/val/test folders."
+            )
+
+            # Refresh dataset view
+            self.refresh_dataset()
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Split Failed",
+                f"Failed to split dataset:\n{str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
 
     def show_statistics(self):
         """Show dataset statistics"""
