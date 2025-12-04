@@ -17,7 +17,8 @@ class TrainingResultsDialog(QDialog):
         super().__init__(parent)
         self.results_dir = Path(results_dir)
         self.setWindowTitle("Training Results")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1200, 800)  # Increased from 1000x700
+        self.resize(1400, 900)  # Set initial size
 
         self.init_ui()
         self.load_results()
@@ -25,15 +26,33 @@ class TrainingResultsDialog(QDialog):
     def init_ui(self):
         """Initialize UI"""
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(15, 15, 15, 15)
 
         # Title
         title = QLabel("Training Results")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("padding: 10px; background-color: #2196F3; color: white; border-radius: 5px;")
         layout.addWidget(title)
 
         # Tabs
         self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+                background: white;
+            }
+            QTabBar::tab {
+                padding: 10px 20px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: #2196F3;
+                color: white;
+            }
+        """)
 
         # Tab 1: Summary
         self.summary_tab = QWidget()
@@ -56,9 +75,11 @@ class TrainingResultsDialog(QDialog):
         btn_layout = QHBoxLayout()
 
         self.btn_open_folder = QPushButton("Open Results Folder")
+        self.btn_open_folder.setMinimumHeight(35)
         self.btn_open_folder.clicked.connect(self.open_results_folder)
 
         self.btn_close = QPushButton("Close")
+        self.btn_close.setMinimumHeight(35)
         self.btn_close.clicked.connect(self.accept)
 
         btn_layout.addWidget(self.btn_open_folder)
@@ -71,9 +92,12 @@ class TrainingResultsDialog(QDialog):
     def init_summary_tab(self):
         """Initialize summary tab"""
         layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         # Metrics Grid
         self.metrics_grid = QGridLayout()
+        self.metrics_grid.setSpacing(15)
 
         # Create metric cards
         self.metric_labels = {}
@@ -95,10 +119,25 @@ class TrainingResultsDialog(QDialog):
 
         # Model Info
         info_group = QGroupBox("Model Information")
+        info_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #cccccc;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding: 15px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
         info_layout = QVBoxLayout()
 
         self.model_info_label = QLabel("Loading...")
         self.model_info_label.setWordWrap(True)
+        self.model_info_label.setStyleSheet("font-weight: normal; padding: 10px;")
         info_layout.addWidget(self.model_info_label)
 
         info_group.setLayout(info_layout)
@@ -109,24 +148,34 @@ class TrainingResultsDialog(QDialog):
 
     def create_metric_card(self, title):
         """Create a metric display card"""
-        widget = QGroupBox(title)
+        widget = QGroupBox()
+        widget.setMinimumHeight(120)
         widget.setStyleSheet("""
             QGroupBox {
-                background-color: #f5f5f5;
-                border-radius: 8px;
+                background-color: #f8f9fa;
+                border: 2px solid #dee2e6;
+                border-radius: 10px;
                 padding: 15px;
-                font-weight: bold;
             }
         """)
 
         layout = QVBoxLayout()
+        layout.setSpacing(5)
 
+        # Title label
+        title_label = QLabel(title)
+        title_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet("color: #495057; background: transparent; border: none;")
+        layout.addWidget(title_label)
+
+        # Value label
         value_label = QLabel("--")
-        value_label.setFont(QFont("Arial", 24, QFont.Weight.Bold))
+        value_label.setFont(QFont("Arial", 28, QFont.Weight.Bold))
         value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        value_label.setStyleSheet("color: #2196F3;")
+        value_label.setStyleSheet("color: #2196F3; background: transparent; border: none; padding: 10px;")
+        layout.addWidget(value_label, 1)
 
-        layout.addWidget(value_label)
         widget.setLayout(layout)
 
         return {'widget': widget, 'value_label': value_label}
@@ -135,9 +184,12 @@ class TrainingResultsDialog(QDialog):
         """Initialize graphs tab"""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: #f5f5f5; }")
 
         content = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         # Graph images
         self.graph_labels = {}
@@ -153,12 +205,35 @@ class TrainingResultsDialog(QDialog):
 
         for key, title in graphs:
             group = QGroupBox(title)
+            group.setStyleSheet("""
+                QGroupBox {
+                    font-weight: bold;
+                    font-size: 12px;
+                    border: 2px solid #cccccc;
+                    border-radius: 5px;
+                    margin-top: 10px;
+                    padding: 15px;
+                    background-color: white;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+                }
+            """)
             group_layout = QVBoxLayout()
+            group_layout.setContentsMargins(10, 15, 10, 10)
 
             label = QLabel("Graph not found")
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setMinimumHeight(300)
-            label.setStyleSheet("border: 1px solid #ccc; background-color: white;")
+            label.setMinimumHeight(400)
+            label.setMaximumHeight(600)
+            label.setStyleSheet("""
+                border: 1px solid #dee2e6;
+                background-color: white;
+                padding: 10px;
+            """)
+            label.setScaledContents(False)  # Don't stretch, keep aspect ratio
 
             self.graph_labels[key] = label
             group_layout.addWidget(label)
@@ -170,6 +245,7 @@ class TrainingResultsDialog(QDialog):
         scroll.setWidget(content)
 
         tab_layout = QVBoxLayout()
+        tab_layout.setContentsMargins(0, 0, 0, 0)
         tab_layout.addWidget(scroll)
         self.graphs_tab.setLayout(tab_layout)
 
@@ -177,23 +253,43 @@ class TrainingResultsDialog(QDialog):
         """Initialize metrics tab"""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: #f5f5f5; }")
 
         content = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
 
-        info = QLabel("Detailed metrics per epoch:")
-        info.setStyleSheet("font-weight: bold; font-size: 12px;")
+        info = QLabel("📊 Detailed Metrics Per Epoch (Last 10 Epochs)")
+        info.setStyleSheet("""
+            font-weight: bold;
+            font-size: 14px;
+            padding: 10px;
+            background-color: #2196F3;
+            color: white;
+            border-radius: 5px;
+        """)
         layout.addWidget(info)
 
         self.metrics_text = QLabel("Loading...")
         self.metrics_text.setWordWrap(True)
-        self.metrics_text.setStyleSheet("font-family: monospace; font-size: 10px;")
+        self.metrics_text.setStyleSheet("""
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            padding: 15px;
+            background-color: white;
+            border: 1px solid #cccccc;
+            border-radius: 5px;
+        """)
         layout.addWidget(self.metrics_text)
+
+        layout.addStretch()
 
         content.setLayout(layout)
         scroll.setWidget(content)
 
         tab_layout = QVBoxLayout()
+        tab_layout.setContentsMargins(0, 0, 0, 0)
         tab_layout.addWidget(scroll)
         self.metrics_tab.setLayout(tab_layout)
 
@@ -254,23 +350,33 @@ class TrainingResultsDialog(QDialog):
                             self.metric_labels[key].setText(value)
 
                 # Load detailed metrics
-                metrics_text = "Epoch\tmAP50\tmAP50-95\tPrecision\tRecall\tLoss\n"
-                metrics_text += "─" * 70 + "\n"
+                metrics_text = "<pre style='line-height: 1.5;'>"
+                metrics_text += "<b>Epoch\tmAP50\t\tmAP50-95\t\tPrecision\tRecall\t\tLoss</b>\n"
+                metrics_text += "─" * 85 + "\n"
 
-                for i, row in enumerate(rows[-10:]):  # Last 10 epochs
-                    epoch = int(float(row.get('epoch', 0))) + 1
-                    map50 = float(row.get('metrics/mAP50(B)', 0))
-                    map5095 = float(row.get('metrics/mAP50-95(B)', 0))
-                    precision = float(row.get('metrics/precision(B)', 0))
-                    recall = float(row.get('metrics/recall(B)', 0))
-                    loss = float(row.get('train/box_loss', 0))
+                # Show last 10 epochs
+                display_rows = rows[-10:] if len(rows) >= 10 else rows
 
-                    metrics_text += f"{epoch}\t{map50:.4f}\t{map5095:.4f}\t{precision:.4f}\t{recall:.4f}\t{loss:.4f}\n"
+                for row in display_rows:
+                    try:
+                        epoch = int(float(row.get('epoch', 0))) + 1
+                        map50 = float(row.get('metrics/mAP50(B)', 0))
+                        map5095 = float(row.get('metrics/mAP50-95(B)', 0))
+                        precision = float(row.get('metrics/precision(B)', 0))
+                        recall = float(row.get('metrics/recall(B)', 0))
+                        loss = float(row.get('train/box_loss', 0))
 
+                        metrics_text += f"{epoch}\t{map50:.4f}\t\t{map5095:.4f}\t\t\t{precision:.4f}\t\t{recall:.4f}\t\t{loss:.4f}\n"
+                    except:
+                        continue
+
+                metrics_text += "</pre>"
                 self.metrics_text.setText(metrics_text)
 
         except Exception as e:
             print(f"Error loading metrics: {e}")
+            import traceback
+            traceback.print_exc()
 
     def load_graphs(self):
         """Load graph images"""
@@ -280,21 +386,27 @@ class TrainingResultsDialog(QDialog):
             if img_path.exists():
                 pixmap = QPixmap(str(img_path))
                 if not pixmap.isNull():
-                    # Scale to fit
+                    # Get label size
+                    label_width = 1100  # Fixed width for consistency
+                    label_height = 500  # Fixed height
+
+                    # Scale pixmap to fit while maintaining aspect ratio
                     scaled_pixmap = pixmap.scaled(
-                        800, 600,
+                        label_width, label_height,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation
                     )
                     label.setPixmap(scaled_pixmap)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 else:
-                    label.setText(f"Failed to load {key}.png")
+                    label.setText(f"❌ Failed to load {key}.png")
             else:
-                label.setText(f"{key}.png not found")
+                label.setText(f"❌ {key}.png not found")
 
     def load_model_info(self):
         """Load model information"""
-        info_text = f"<b>Results Directory:</b><br>{self.results_dir}<br><br>"
+        info_text = f"<b>📁 Results Directory:</b><br>"
+        info_text += f"<code>{self.results_dir}</code><br><br>"
 
         # Check for weights
         best_weights = self.results_dir / 'weights' / 'best.pt'
@@ -302,12 +414,14 @@ class TrainingResultsDialog(QDialog):
 
         if best_weights.exists():
             size_mb = best_weights.stat().st_size / (1024 * 1024)
-            info_text += f"<b>Best Weights:</b> {best_weights}<br>"
+            info_text += f"<b>🏆 Best Weights:</b><br>"
+            info_text += f"<code>{best_weights}</code><br>"
             info_text += f"<b>Size:</b> {size_mb:.2f} MB<br><br>"
 
         if last_weights.exists():
             size_mb = last_weights.stat().st_size / (1024 * 1024)
-            info_text += f"<b>Last Weights:</b> {last_weights}<br>"
+            info_text += f"<b>📦 Last Weights:</b><br>"
+            info_text += f"<code>{last_weights}</code><br>"
             info_text += f"<b>Size:</b> {size_mb:.2f} MB<br>"
 
         self.model_info_label.setText(info_text)
@@ -330,3 +444,4 @@ class TrainingResultsDialog(QDialog):
                 "Error",
                 f"Failed to open folder:\n{str(e)}"
             )
+
