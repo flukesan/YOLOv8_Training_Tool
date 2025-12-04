@@ -266,11 +266,29 @@ class MainWindow(QMainWindow):
             self.label_manager.set_classes(self.classes)
             self.image_viewer.set_classes(self.classes, self.label_manager.class_colors)
 
+        # Auto-save classes to config.yaml
+        self.save_classes_to_config()
+
     def on_class_deleted(self, index):
         """Delete class"""
         if 0 <= index < len(self.classes):
             del self.classes[index]
             self.class_manager.set_classes(self.classes)
+
+            # Auto-save classes to config.yaml
+            self.save_classes_to_config()
+
+    def save_classes_to_config(self):
+        """Save classes to project config.yaml"""
+        if not self.dataset_manager or not self.classes:
+            return
+
+        try:
+            # Create/update data.yaml with current classes
+            self.dataset_manager.create_data_yaml(self.classes)
+            print(f"Saved {len(self.classes)} classes to config.yaml")
+        except Exception as e:
+            print(f"Error saving classes to config: {e}")
 
     def on_class_selected(self, class_id):
         """Class selected"""
@@ -352,8 +370,39 @@ class MainWindow(QMainWindow):
 
     def load_project_data(self):
         """Load project data"""
+        # Load classes from config.yaml if it exists
+        self.load_classes_from_config()
+
+        # Refresh dataset
         self.refresh_dataset()
         self.status_bar.showMessage(f"Loaded project: {self.project_path.name}")
+
+    def load_classes_from_config(self):
+        """Load classes from project config.yaml"""
+        import yaml
+
+        if not self.project_path:
+            return
+
+        config_path = self.project_path / 'config.yaml'
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+
+                if config and 'names' in config:
+                    # Load classes from config
+                    self.classes = config['names']
+
+                    # Update UI
+                    self.class_manager.set_classes(self.classes)
+                    if self.label_manager:
+                        self.label_manager.set_classes(self.classes)
+                        self.image_viewer.set_classes(self.classes, self.label_manager.class_colors)
+
+                    print(f"Loaded {len(self.classes)} classes from config.yaml")
+            except Exception as e:
+                print(f"Error loading classes from config: {e}")
 
     def show_about(self):
         """Show about dialog"""
