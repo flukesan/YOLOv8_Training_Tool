@@ -2,7 +2,8 @@
 Training Widget - training controls
 """
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel,
-                             QSpinBox, QDoubleSpinBox, QFormLayout, QGroupBox)
+                             QSpinBox, QDoubleSpinBox, QFormLayout, QGroupBox,
+                             QComboBox)
 from PyQt6.QtCore import pyqtSignal
 from config.settings import Settings
 
@@ -33,6 +34,30 @@ class TrainingWidget(QWidget):
 
         # Get default values from Settings
         default_params = Settings.DEFAULT_TRAIN_PARAMS
+
+        # Model selection
+        self.model_combo = QComboBox()
+        model_descriptions = {
+            'YOLOv8n': '⚡ Fastest - For real-time detection',
+            'YOLOv8s': '⚖️ Balanced - Recommended for Go/NoGo',
+            'YOLOv8m': '🎯 Accurate - For small defects',
+            'YOLOv8l': '💪 Very Accurate - High precision',
+            'YOLOv8x': '🏆 Most Accurate - Best quality'
+        }
+        for model_name, model_file in Settings.YOLO_MODELS.items():
+            display_text = f"{model_name} - {model_descriptions.get(model_name, '')}"
+            self.model_combo.addItem(display_text, model_file)
+        # Set default to YOLOv8s (index 1)
+        self.model_combo.setCurrentIndex(1)
+        self.model_combo.setToolTip(
+            "Choose model size:\n"
+            "• YOLOv8n: Fastest, lowest accuracy\n"
+            "• YOLOv8s: Balanced (Recommended)\n"
+            "• YOLOv8m: High accuracy\n"
+            "• YOLOv8l: Very high accuracy\n"
+            "• YOLOv8x: Maximum accuracy, slowest"
+        )
+        param_layout.addRow("Model:", self.model_combo)
 
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(1, 1000)
@@ -80,7 +105,8 @@ class TrainingWidget(QWidget):
         config = {
             'epochs': self.epochs_spin.value(),
             'batch': self.batch_spin.value(),  # Changed from 'batch_size' to 'batch'
-            'lr0': self.lr_spin.value()
+            'lr0': self.lr_spin.value(),
+            'model': self.model_combo.currentData()  # Get selected model file
         }
         self.start_training.emit(config)
         self.btn_start.setEnabled(False)

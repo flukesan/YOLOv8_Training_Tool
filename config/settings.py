@@ -59,6 +59,78 @@ class Settings:
         # evolve, bucket, image_weights, quad, linear_lr, local_rank, label_smoothing
     }
 
+    # Data Augmentation Settings (Hyperparameters)
+    # These can be passed to model.train() to improve model generalization
+    AUGMENTATION_PARAMS = {
+        # Image augmentation
+        'hsv_h': 0.015,          # HSV-Hue augmentation (0-1)
+        'hsv_s': 0.7,            # HSV-Saturation augmentation (0-1)
+        'hsv_v': 0.4,            # HSV-Value augmentation (0-1)
+        'degrees': 0.0,          # Rotation (+/- deg)
+        'translate': 0.1,        # Translation (+/- fraction)
+        'scale': 0.5,            # Scale (+/- gain)
+        'shear': 0.0,            # Shear (+/- deg)
+        'perspective': 0.0,      # Perspective (+/- fraction)
+        'flipud': 0.0,           # Flip up-down probability
+        'fliplr': 0.5,           # Flip left-right probability
+        'mosaic': 1.0,           # Mosaic augmentation probability
+        'mixup': 0.0,            # Mixup augmentation probability
+        'copy_paste': 0.0,       # Copy-paste augmentation probability
+    }
+
+    # Recommended augmentation presets for different scenarios
+    AUGMENTATION_PRESETS = {
+        'light': {  # For stable, controlled environments
+            'hsv_h': 0.01,
+            'hsv_s': 0.5,
+            'hsv_v': 0.3,
+            'degrees': 5.0,
+            'translate': 0.05,
+            'scale': 0.3,
+            'fliplr': 0.5,
+            'mosaic': 0.5,
+        },
+        'medium': {  # Default balanced augmentation
+            'hsv_h': 0.015,
+            'hsv_s': 0.7,
+            'hsv_v': 0.4,
+            'degrees': 10.0,
+            'translate': 0.1,
+            'scale': 0.5,
+            'fliplr': 0.5,
+            'mosaic': 1.0,
+            'mixup': 0.1,
+        },
+        'heavy': {  # For varied environments or small datasets
+            'hsv_h': 0.02,
+            'hsv_s': 0.8,
+            'hsv_v': 0.5,
+            'degrees': 15.0,
+            'translate': 0.15,
+            'scale': 0.7,
+            'shear': 5.0,
+            'perspective': 0.0005,
+            'fliplr': 0.5,
+            'flipud': 0.2,
+            'mosaic': 1.0,
+            'mixup': 0.2,
+            'copy_paste': 0.1,
+        },
+        'industrial': {  # Optimized for industrial inspection (Go/NoGo)
+            'hsv_h': 0.01,      # Minimal color shift
+            'hsv_s': 0.6,       # Moderate saturation change
+            'hsv_v': 0.5,       # Lighting variations
+            'degrees': 10.0,    # Small rotation (products may rotate)
+            'translate': 0.1,   # Position variation
+            'scale': 0.4,       # Size variation
+            'fliplr': 0.5,      # Mirror products
+            'flipud': 0.0,      # Usually don't flip upside down
+            'mosaic': 0.8,      # Mix multiple products
+            'mixup': 0.0,       # Don't blend (confuses defects)
+            'copy_paste': 0.0,  # Don't copy-paste (confuses defects)
+        }
+    }
+
     # Dataset split ratios
     DATASET_SPLIT = {
         'train': 0.7,
