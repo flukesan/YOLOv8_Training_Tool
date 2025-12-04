@@ -92,6 +92,36 @@ class ModelTestingDialog(QDialog):
 
         # Tabs for different testing modes
         tabs = QTabWidget()
+
+        # Apply styling to tabs for better visibility
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #cccccc;
+                border-radius: 5px;
+                background-color: white;
+            }
+            QTabBar::tab {
+                background-color: #e0e0e0;
+                color: #333333;
+                padding: 10px 20px;
+                margin-right: 2px;
+                border: 1px solid #cccccc;
+                border-bottom: none;
+                border-top-left-radius: 5px;
+                border-top-right-radius: 5px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background-color: white;
+                color: #2196F3;
+                border-bottom: 2px solid white;
+            }
+            QTabBar::tab:hover {
+                background-color: #d0d0d0;
+            }
+        """)
+
         tabs.addTab(self.create_image_testing_tab(), "📷 Test Images")
         tabs.addTab(self.create_video_testing_tab(), "🎥 Test Videos")
         tabs.addTab(self.create_batch_testing_tab(), "📊 Batch Testing")
