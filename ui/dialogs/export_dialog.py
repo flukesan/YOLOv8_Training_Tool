@@ -15,7 +15,7 @@ class ExportDialog(QDialog):
     def init_ui(self):
         """Initialize UI"""
         self.setWindowTitle("Export Model")
-        self.setMinimumWidth(300)
+        self.setMinimumWidth(350)
 
         layout = QVBoxLayout()
 
@@ -24,13 +24,28 @@ class ExportDialog(QDialog):
         layout.addWidget(label)
 
         # Format checkboxes
-        format_group = QGroupBox("Formats")
+        format_group = QGroupBox("Export Formats")
         format_layout = QVBoxLayout()
 
-        self.cb_onnx = QCheckBox("ONNX")
-        self.cb_tflite = QCheckBox("TensorFlow Lite")
-        self.cb_torchscript = QCheckBox("TorchScript")
-        self.cb_coreml = QCheckBox("CoreML")
+        # Native PyTorch format
+        self.cb_pt = QCheckBox("PyTorch (.pt) - Native format")
+        self.cb_pt.setChecked(True)  # Default checked
+        format_layout.addWidget(self.cb_pt)
+
+        # Separator
+        separator = QLabel("─" * 40)
+        separator.setStyleSheet("color: gray;")
+        format_layout.addWidget(separator)
+
+        # Converted formats
+        converted_label = QLabel("Converted Formats:")
+        converted_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        format_layout.addWidget(converted_label)
+
+        self.cb_onnx = QCheckBox("ONNX - Cross-platform format")
+        self.cb_tflite = QCheckBox("TensorFlow Lite - Mobile/Embedded")
+        self.cb_torchscript = QCheckBox("TorchScript - PyTorch optimized")
+        self.cb_coreml = QCheckBox("CoreML - Apple devices")
 
         format_layout.addWidget(self.cb_onnx)
         format_layout.addWidget(self.cb_tflite)
@@ -39,6 +54,12 @@ class ExportDialog(QDialog):
 
         format_group.setLayout(format_layout)
         layout.addWidget(format_group)
+
+        # Info label
+        info_label = QLabel("Note: PyTorch (.pt) format is the fastest option\nand preserves full model capabilities.")
+        info_label.setStyleSheet("color: gray; font-size: 10px;")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -56,6 +77,8 @@ class ExportDialog(QDialog):
     def get_selected_formats(self):
         """Get selected export formats"""
         formats = []
+        if self.cb_pt.isChecked():
+            formats.append('pt')
         if self.cb_onnx.isChecked():
             formats.append('onnx')
         if self.cb_tflite.isChecked():
