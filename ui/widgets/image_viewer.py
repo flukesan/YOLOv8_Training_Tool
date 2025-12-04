@@ -237,21 +237,53 @@ class ImageViewer(QWidget):
 
         self.image_label.setPixmap(display_pixmap)
 
+    def get_image_coordinates(self, widget_pos):
+        """Convert widget coordinates to image coordinates"""
+        if not self.pixmap:
+            return None
+
+        # Get the displayed pixmap size (with zoom)
+        displayed_width = int(self.pixmap.width() * self.zoom_factor)
+        displayed_height = int(self.pixmap.height() * self.zoom_factor)
+
+        # Get label size
+        label_width = self.image_label.width()
+        label_height = self.image_label.height()
+
+        # Calculate offset (image is centered in label)
+        offset_x = max(0, (label_width - displayed_width) // 2)
+        offset_y = max(0, (label_height - displayed_height) // 2)
+
+        # Adjust for offset
+        img_x = widget_pos.x() - offset_x
+        img_y = widget_pos.y() - offset_y
+
+        # Check if click is within image bounds
+        if img_x < 0 or img_y < 0 or img_x >= displayed_width or img_y >= displayed_height:
+            return None
+
+        return QPoint(img_x, img_y)
+
     def mousePressEvent(self, event):
         """Handle mouse press for drawing"""
         if not self.pixmap:
             return
 
-        pos = self.image_label.mapFrom(self, event.pos())
+        # Get position relative to scroll area content
+        widget_pos = self.image_label.mapFromGlobal(event.globalPos())
+        img_pos = self.get_image_coordinates(widget_pos)
+
+        if img_pos is None:
+            return
 
         if event.button() == Qt.MouseButton.LeftButton:
             if self.annotation_mode == "box":
-                self.start_point = pos
+                self.start_point = img_pos
                 self.drawing = True
 
             elif self.annotation_mode == "polygon":
                 # Add point to polygon
-                self.current_polygon_points.append(pos)
+                self.current_polygon_points.append(img_pos)
                 self.drawing = True
                 self.update_display()
 
@@ -265,10 +297,14 @@ class ImageViewer(QWidget):
         if not self.pixmap:
             return
 
-        pos = self.image_label.mapFrom(self, event.pos())
+        widget_pos = self.image_label.mapFromGlobal(event.globalPos())
+        img_pos = self.get_image_coordinates(widget_pos)
+
+        if img_pos is None:
+            return
 
         if self.annotation_mode == "box" and self.drawing and self.start_point:
-            self.current_rect = QRect(self.start_point, pos).normalized()
+            self.current_rect = QRect(self.start_point, img_pos).normalized()
             self.update_display()
 
     def mouseReleaseEvent(self, event):
