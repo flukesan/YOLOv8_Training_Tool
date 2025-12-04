@@ -4,7 +4,7 @@ Main Window - Application main interface
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QMenuBar, QFileDialog, QMessageBox, QSplitter,
                              QStatusBar)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from pathlib import Path
 
 from ui.widgets.image_viewer import ImageViewer
@@ -26,6 +26,11 @@ from config.settings import Settings
 
 class MainWindow(QMainWindow):
     """Main application window"""
+
+    # Signals for training updates (thread-safe UI updates)
+    training_epoch_update = pyqtSignal(dict)
+    training_started = pyqtSignal()
+    training_finished = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -96,6 +101,11 @@ class MainWindow(QMainWindow):
 
         self.metrics_widget = MetricsWidget()
         bottom_layout.addWidget(self.metrics_widget)
+
+        # Connect training signals to update UI
+        self.training_epoch_update.connect(self.update_training_metrics)
+        self.training_started.connect(self.on_training_started)
+        self.training_finished.connect(self.on_training_finished)
 
         bottom_panel.setLayout(bottom_layout)
 
@@ -412,16 +422,99 @@ class MainWindow(QMainWindow):
     def on_start_training(self, config=None):
         """Start training"""
         if not self.model_trainer or not self.dataset_manager:
+            QMessageBox.warning(self, "Warning", "Please create or open a project first")
+            return
+
+        # Check if classes are defined
+        if not self.classes:
+            QMessageBox.warning(
+                self,
+                "No Classes",
+                "Please add classes before training.\n\n"
+                "Use the Classes panel to add object classes."
+            )
             return
 
         # Create data.yaml
-        data_yaml = self.dataset_manager.create_data_yaml(self.classes)
+        try:
+            data_yaml = self.dataset_manager.create_data_yaml(self.classes)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create data.yaml:\n{str(e)}")
+            return
+
+        # Register callbacks for training updates
+        self.model_trainer.register_callback('on_train_start', self._on_train_start_callback)
+        self.model_trainer.register_callback('on_epoch_end', self._on_epoch_end_callback)
+        self.model_trainer.register_callback('on_train_end', self._on_train_end_callback)
+        self.model_trainer.register_callback('on_train_error', self._on_train_error_callback)
 
         # Start training
-        self.model_trainer.start_training(
-            config or {},
-            data_yaml
-        )
+        try:
+            self.model_trainer.start_training(
+                config or {},
+                data_yaml
+            )
+            self.status_bar.showMessage("Training started...")
+        except Exception as e:
+            QMessageBox.critical(self, "Training Error", f"Failed to start training:\n{str(e)}")
+
+    def _on_train_start_callback(self, session):
+        """Callback when training starts (runs in background thread)"""
+        self.training_started.emit()
+
+    def _on_epoch_end_callback(self, session, metrics):
+        """Callback when epoch ends (runs in background thread)"""
+        # Get current metrics from session
+        current_metrics = self.model_trainer.get_current_metrics()
+        self.training_epoch_update.emit(current_metrics)
+
+    def _on_train_end_callback(self, session, results):
+        """Callback when training ends (runs in background thread)"""
+        self.training_finished.emit()
+
+    def _on_train_error_callback(self, error_msg):
+        """Callback when training error occurs (runs in background thread)"""
+        self.training_finished.emit()
+
+    def on_training_started(self):
+        """Handle training started (runs in main thread)"""
+        self.training_widget.set_status("Training...")
+        self.status_bar.showMessage("Training in progress...")
+
+    def on_training_finished(self):
+        """Handle training finished (runs in main thread)"""
+        self.training_widget.training_finished()
+
+        if self.model_trainer and self.model_trainer.current_session:
+            status = self.model_trainer.current_session.status
+
+            if status == 'completed':
+                self.status_bar.showMessage("Training completed!")
+                QMessageBox.information(
+                    self,
+                    "Training Complete",
+                    "Model training completed successfully!\n\n"
+                    f"Best weights saved to:\n{self.model_trainer.get_best_weights_path()}"
+                )
+            elif status == 'failed':
+                self.status_bar.showMessage("Training failed")
+                QMessageBox.warning(
+                    self,
+                    "Training Failed",
+                    "Training failed. Check the console for error details."
+                )
+            else:
+                self.status_bar.showMessage(f"Training {status}")
+
+    def update_training_metrics(self, metrics):
+        """Update training metrics display (runs in main thread)"""
+        self.metrics_widget.update_metrics(metrics)
+
+        # Update status bar with current epoch
+        if 'epoch' in metrics and 'total_epochs' in metrics:
+            self.status_bar.showMessage(
+                f"Training - Epoch {metrics['epoch']}/{metrics['total_epochs']}"
+            )
 
     def on_stop_training(self):
         """Stop training"""

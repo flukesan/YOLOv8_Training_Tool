@@ -147,7 +147,6 @@ class ModelTrainer:
         """Worker function for training"""
         try:
             from ultralytics import YOLO
-            from ultralytics.utils.callbacks import default_callbacks
 
             self.current_session.status = 'running'
             self.current_session.start_time = time.time()
@@ -157,7 +156,7 @@ class ModelTrainer:
             # Load model
             model = YOLO(config['model'])
 
-            # Add custom callbacks
+            # Add custom callbacks to YOLO trainer
             def on_train_epoch_end(trainer):
                 """Called at end of each training epoch"""
                 if self.stop_flag.is_set():
@@ -176,24 +175,25 @@ class ModelTrainer:
 
                 # Extract metrics
                 metrics = {}
-                if hasattr(trainer, 'metrics'):
-                    metrics = {
-                        'train_loss': float(trainer.loss.item()) if hasattr(trainer, 'loss') else 0.0,
-                    }
+                if hasattr(trainer, 'loss_items'):
+                    loss = trainer.loss_items
+                    if loss is not None and len(loss) > 0:
+                        metrics['train_loss'] = float(loss[0]) if len(loss) > 0 else 0.0
 
-                if hasattr(trainer, 'validator') and hasattr(trainer.validator, 'metrics'):
-                    val_metrics = trainer.validator.metrics
-                    if hasattr(val_metrics, 'results_dict'):
-                        results = val_metrics.results_dict
-                        metrics.update({
-                            'precision': results.get('metrics/precision(B)', 0.0),
-                            'recall': results.get('metrics/recall(B)', 0.0),
-                            'mAP50': results.get('metrics/mAP50(B)', 0.0),
-                            'mAP50-95': results.get('metrics/mAP50-95(B)', 0.0),
-                        })
+                if hasattr(trainer, 'metrics') and trainer.metrics:
+                    results = trainer.metrics
+                    metrics.update({
+                        'precision': float(results.get('metrics/precision(B)', 0.0)),
+                        'recall': float(results.get('metrics/recall(B)', 0.0)),
+                        'mAP50': float(results.get('metrics/mAP50(B)', 0.0)),
+                        'mAP50-95': float(results.get('metrics/mAP50-95(B)', 0.0)),
+                    })
 
                 self.current_session.update_metrics(metrics)
                 self._trigger_callbacks('on_epoch_end', self.current_session, metrics)
+
+            # Register callback with YOLO model
+            model.add_callback('on_train_epoch_end', on_train_epoch_end)
 
             # Train model
             results = model.train(
@@ -215,9 +215,11 @@ class ModelTrainer:
         except Exception as e:
             self.current_session.status = 'failed'
             self.current_session.end_time = time.time()
-            print(f"Training failed: {e}")
+            error_msg = f"Training failed: {e}"
+            print(error_msg)
             import traceback
             traceback.print_exc()
+            self._trigger_callbacks('on_train_error', error_msg)
 
     def pause_training(self):
         """Pause the current training session"""
