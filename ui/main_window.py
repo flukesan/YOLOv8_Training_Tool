@@ -523,25 +523,89 @@ class MainWindow(QMainWindow):
 
     def export_model(self):
         """Export trained model"""
-        if not self.model_trainer:
+        # Check if project is open
+        if not self.project_path:
+            QMessageBox.warning(
+                self,
+                "No Project",
+                "Please create or open a project first.\n\n"
+                "Use File → New Project or File → Open Project"
+            )
             return
 
+        # Check if model trainer exists
+        if not self.model_trainer:
+            QMessageBox.warning(
+                self,
+                "No Training Session",
+                "No training session found.\n\n"
+                "Please train a model first using Training → Start Training"
+            )
+            return
+
+        # Check if trained model exists
         best_weights = self.model_trainer.get_best_weights_path()
         if not best_weights or not best_weights.exists():
-            QMessageBox.warning(self, "Warning", "No trained model found")
+            QMessageBox.warning(
+                self,
+                "No Trained Model",
+                "No trained model found.\n\n"
+                "Please complete model training first.\n"
+                "The best model weights will be available after training completes."
+            )
             return
 
+        # Show export dialog
         dialog = ExportDialog(self)
-        if dialog.exec():
+        if dialog.exec() == ExportDialog.DialogCode.Accepted:
             formats = dialog.get_selected_formats()
-            if formats:
+
+            if not formats:
+                QMessageBox.warning(
+                    self,
+                    "No Format Selected",
+                    "Please select at least one export format."
+                )
+                return
+
+            try:
+                # Show progress message
+                self.status_bar.showMessage("Exporting model...")
+
+                # Export model
                 export_mgr = ExportManager(best_weights)
                 results = export_mgr.export_multiple(formats)
 
-                QMessageBox.information(
-                    self, "Export Complete",
-                    f"Exported to {len(results)} formats"
+                # Show success message
+                success_count = sum(1 for r in results.values() if r.get('success'))
+                failed_count = len(results) - success_count
+
+                if failed_count == 0:
+                    msg = f"Successfully exported model to {success_count} format(s):\n\n"
+                    for fmt, result in results.items():
+                        if result.get('success'):
+                            msg += f"✓ {fmt.upper()}: {result.get('path', 'N/A')}\n"
+
+                    QMessageBox.information(self, "Export Complete", msg)
+                    self.status_bar.showMessage("Model export completed")
+                else:
+                    msg = f"Export completed with {failed_count} error(s):\n\n"
+                    for fmt, result in results.items():
+                        status = "✓" if result.get('success') else "✗"
+                        msg += f"{status} {fmt.upper()}\n"
+
+                    QMessageBox.warning(self, "Export Completed with Errors", msg)
+                    self.status_bar.showMessage("Model export completed with errors")
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Export Failed",
+                    f"Failed to export model:\n{str(e)}"
                 )
+                self.status_bar.showMessage("Model export failed")
+                import traceback
+                traceback.print_exc()
 
     def refresh_dataset(self):
         """Refresh dataset view"""
