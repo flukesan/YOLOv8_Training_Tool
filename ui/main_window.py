@@ -16,6 +16,7 @@ from ui.widgets.metrics_widget import MetricsWidget
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.export_dialog import ExportDialog
 from ui.dialogs.split_dataset_dialog import SplitDatasetDialog
+from ui.dialogs.training_results_dialog import TrainingResultsDialog
 
 from core.dataset_manager import DatasetManager
 from core.label_manager import LabelManager, BoundingBox, Polygon
@@ -152,6 +153,8 @@ class MainWindow(QMainWindow):
         # Training menu
         training_menu = menubar.addMenu("Training")
         training_menu.addAction("Start Training", self.on_start_training)
+        training_menu.addAction("View Results", self.view_training_results)
+        training_menu.addSeparator()
         training_menu.addAction("Export Model", self.export_model)
 
         # Help menu
@@ -520,6 +523,58 @@ class MainWindow(QMainWindow):
         """Stop training"""
         if self.model_trainer:
             self.model_trainer.stop_training()
+
+    def view_training_results(self):
+        """View training results"""
+        if not self.project_path:
+            QMessageBox.warning(
+                self,
+                "No Project",
+                "Please create or open a project first.\n\n"
+                "Use File → New Project or File → Open Project"
+            )
+            return
+
+        # Look for training results
+        runs_dir = self.project_path / 'runs' / 'train'
+
+        if not runs_dir.exists():
+            QMessageBox.warning(
+                self,
+                "No Training Results",
+                "No training results found.\n\n"
+                "Please complete model training first using Training → Start Training"
+            )
+            return
+
+        # Find all training runs
+        training_runs = sorted([d for d in runs_dir.iterdir() if d.is_dir()],
+                              key=lambda x: x.stat().st_mtime,
+                              reverse=True)
+
+        if not training_runs:
+            QMessageBox.warning(
+                self,
+                "No Training Results",
+                "No training results found in runs/train folder."
+            )
+            return
+
+        # Use the most recent training run
+        latest_run = training_runs[0]
+
+        # Show results dialog
+        try:
+            dialog = TrainingResultsDialog(latest_run, self)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load training results:\n{str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
 
     def export_model(self):
         """Export trained model"""
