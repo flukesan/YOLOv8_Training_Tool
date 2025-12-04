@@ -88,6 +88,35 @@ YOLOv8_Training_Tool/
 
 ## การติดตั้ง
 
+### สำหรับ Windows:
+
+1. Clone repository:
+```bash
+git clone <repository-url>
+cd YOLOv8_Training_Tool
+```
+
+2. ติดตั้ง dependencies (Windows):
+```bash
+# วิธีที่ 1: ใช้ requirements สำหรับ Windows (แนะนำ)
+pip install -r requirements_windows.txt
+
+# วิธีที่ 2: ติดตั้ง ultralytics แบบ pre-built binary
+pip install ultralytics --only-binary :all:
+pip install -r requirements_minimal.txt
+```
+
+3. รันโปรแกรม:
+```bash
+python main.py
+```
+
+**หมายเหตุ:** หากพบ error `Microsoft Visual C++ 14.0 or greater is required`:
+- ให้ใช้ `requirements_windows.txt` แทน `requirements.txt`
+- หรือดู [INSTALL.md](INSTALL.md) สำหรับวิธีแก้ปัญหาเพิ่มเติม
+
+### สำหรับ Linux/Mac:
+
 1. Clone repository:
 ```bash
 git clone <repository-url>
