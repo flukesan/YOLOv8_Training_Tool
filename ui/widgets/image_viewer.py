@@ -3,7 +3,7 @@ Image Viewer Widget - displays images with bounding boxes and polygons
 """
 from PyQt6.QtWidgets import (QWidget, QLabel, QVBoxLayout, QHBoxLayout, QScrollArea,
                              QPushButton, QSlider, QButtonGroup, QRadioButton, QGroupBox)
-from PyQt6.QtCore import Qt, QRect, QPoint, pyqtSignal, QPolygon
+from PyQt6.QtCore import Qt, QRect, QPoint, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPolygonF, QPointF, QWheelEvent
 from pathlib import Path
 from typing import List, Optional, Tuple
