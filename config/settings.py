@@ -53,11 +53,10 @@ class Settings:
         'project': None,
         'name': None,
         'exist_ok': False,
-        'label_smoothing': 0.0,
         'save_period': -1,
         'seed': 0,
         # Removed deprecated parameters: nosave, noval, noautoanchor, noplots,
-        # evolve, bucket, image_weights, quad, linear_lr, local_rank
+        # evolve, bucket, image_weights, quad, linear_lr, local_rank, label_smoothing
     }
 
     # Dataset split ratios

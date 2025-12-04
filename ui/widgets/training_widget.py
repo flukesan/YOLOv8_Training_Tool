@@ -75,7 +75,7 @@ class TrainingWidget(QWidget):
         """Handle start training"""
         config = {
             'epochs': self.epochs_spin.value(),
-            'batch_size': self.batch_spin.value(),
+            'batch': self.batch_spin.value(),  # Changed from 'batch_size' to 'batch'
             'lr0': self.lr_spin.value()
         }
         self.start_training.emit(config)
