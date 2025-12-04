@@ -17,7 +17,7 @@ from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.export_dialog import ExportDialog
 
 from core.dataset_manager import DatasetManager
-from core.label_manager import LabelManager, BoundingBox
+from core.label_manager import LabelManager, BoundingBox, Polygon
 from core.model_trainer import ModelTrainer
 from core.export_manager import ExportManager
 from config.settings import Settings
@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         # Left panel - Image viewer
         self.image_viewer = ImageViewer()
         self.image_viewer.box_added.connect(self.on_box_added)
+        self.image_viewer.polygon_added.connect(self.on_polygon_added)
 
         # Right panel - Tools
         right_panel = QWidget()
@@ -223,6 +224,22 @@ class MainWindow(QMainWindow):
 
         label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
         self.label_manager.add_annotation(label_path, bbox)
+
+        # Reload annotations
+        annotations = self.label_manager.load_annotations(label_path)
+        self.image_viewer.set_annotations(annotations)
+        self.label_widget.update_annotations(annotations)
+
+    def on_polygon_added(self, points, class_id):
+        """Handle new polygon"""
+        if not self.label_manager or not self.current_image:
+            return
+
+        img_width, img_height = self.image_viewer.pixmap.width(), self.image_viewer.pixmap.height()
+        polygon = Polygon.from_absolute(class_id, points, img_width, img_height)
+
+        label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
+        self.label_manager.add_annotation(label_path, polygon)
 
         # Reload annotations
         annotations = self.label_manager.load_annotations(label_path)

@@ -2,21 +2,29 @@
 Label Manager - handles annotation and labeling operations
 """
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 import random
 
 
-class BoundingBox:
+class Annotation:
+    """Base class for annotations"""
+    def __init__(self, class_id: int, confidence: float = 1.0):
+        self.class_id = class_id
+        self.confidence = confidence
+        self.annotation_type = "unknown"
+
+
+class BoundingBox(Annotation):
     """Represents a bounding box annotation"""
 
     def __init__(self, class_id: int, x_center: float, y_center: float,
                  width: float, height: float, confidence: float = 1.0):
-        self.class_id = class_id
+        super().__init__(class_id, confidence)
         self.x_center = x_center
         self.y_center = y_center
         self.width = width
         self.height = height
-        self.confidence = confidence
+        self.annotation_type = "box"
 
     def to_yolo_format(self) -> str:
         """Convert to YOLO format string"""
@@ -70,6 +78,63 @@ class BoundingBox:
         return f"BoundingBox(class={self.class_id}, x={self.x_center:.3f}, y={self.y_center:.3f}, w={self.width:.3f}, h={self.height:.3f})"
 
 
+class Polygon(Annotation):
+    """Represents a polygon annotation for segmentation"""
+
+    def __init__(self, class_id: int, points: List[Tuple[float, float]],
+                 confidence: float = 1.0):
+        super().__init__(class_id, confidence)
+        self.points = points  # List of (x, y) normalized coordinates
+        self.annotation_type = "polygon"
+
+    def to_yolo_seg_format(self) -> str:
+        """Convert to YOLO segmentation format"""
+        points_str = " ".join([f"{x:.6f} {y:.6f}" for x, y in self.points])
+        return f"{self.class_id} {points_str}"
+
+    def to_absolute(self, img_width: int, img_height: int) -> List[Tuple[int, int]]:
+        """Convert normalized coordinates to absolute pixel coordinates"""
+        return [(int(x * img_width), int(y * img_height)) for x, y in self.points]
+
+    @classmethod
+    def from_absolute(cls, class_id: int, points: List[Tuple[int, int]],
+                     img_width: int, img_height: int):
+        """Create Polygon from absolute pixel coordinates"""
+        normalized_points = [(x / img_width, y / img_height) for x, y in points]
+        return cls(class_id, normalized_points)
+
+    @classmethod
+    def from_yolo_seg_format(cls, line: str):
+        """Create Polygon from YOLO segmentation format line"""
+        parts = line.strip().split()
+        if len(parts) < 7:  # At least class_id + 3 points (x,y pairs)
+            return None
+
+        class_id = int(parts[0])
+
+        # Parse points
+        points = []
+        for i in range(1, len(parts), 2):
+            if i + 1 < len(parts):
+                x = float(parts[i])
+                y = float(parts[i + 1])
+                points.append((x, y))
+
+        if len(points) < 3:  # Need at least 3 points for a polygon
+            return None
+
+        return cls(class_id, points)
+
+    def get_bounding_box(self) -> Tuple[float, float, float, float]:
+        """Get bounding box of polygon (x_min, y_min, x_max, y_max)"""
+        xs = [p[0] for p in self.points]
+        ys = [p[1] for p in self.points]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def __repr__(self):
+        return f"Polygon(class={self.class_id}, points={len(self.points)})"
+
+
 class LabelManager:
     """Manages labels and annotations for images"""
 
@@ -114,7 +179,7 @@ class LabelManager:
 
         return int((r + m) * 255), int((g + m) * 255), int((b + m) * 255)
 
-    def load_annotations(self, label_path: Path) -> List[BoundingBox]:
+    def load_annotations(self, label_path: Path) -> List[Union[BoundingBox, Polygon]]:
         """Load annotations from a YOLO format label file"""
         if not label_path.exists():
             return []
@@ -122,24 +187,35 @@ class LabelManager:
         annotations = []
         with open(label_path, 'r') as f:
             for line in f:
-                bbox = BoundingBox.from_yolo_format(line)
-                if bbox:
-                    annotations.append(bbox)
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    # Try to parse as bbox (5 values) or polygon (>6 values)
+                    if len(parts) == 5:
+                        bbox = BoundingBox.from_yolo_format(line)
+                        if bbox:
+                            annotations.append(bbox)
+                    elif len(parts) >= 7:  # Polygon with at least 3 points
+                        polygon = Polygon.from_yolo_seg_format(line)
+                        if polygon:
+                            annotations.append(polygon)
 
         return annotations
 
-    def save_annotations(self, label_path: Path, annotations: List[BoundingBox]):
+    def save_annotations(self, label_path: Path, annotations: List[Union[BoundingBox, Polygon]]):
         """Save annotations to a YOLO format label file"""
         label_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(label_path, 'w') as f:
-            for bbox in annotations:
-                f.write(bbox.to_yolo_format() + '\n')
+            for ann in annotations:
+                if isinstance(ann, BoundingBox):
+                    f.write(ann.to_yolo_format() + '\n')
+                elif isinstance(ann, Polygon):
+                    f.write(ann.to_yolo_seg_format() + '\n')
 
-    def add_annotation(self, label_path: Path, bbox: BoundingBox):
+    def add_annotation(self, label_path: Path, annotation: Union[BoundingBox, Polygon]):
         """Add a new annotation to a label file"""
         annotations = self.load_annotations(label_path)
-        annotations.append(bbox)
+        annotations.append(annotation)
         self.save_annotations(label_path, annotations)
 
     def delete_annotation(self, label_path: Path, index: int) -> bool:
@@ -151,11 +227,12 @@ class LabelManager:
             return True
         return False
 
-    def update_annotation(self, label_path: Path, index: int, bbox: BoundingBox) -> bool:
+    def update_annotation(self, label_path: Path, index: int,
+                         annotation: Union[BoundingBox, Polygon]) -> bool:
         """Update an existing annotation"""
         annotations = self.load_annotations(label_path)
         if 0 <= index < len(annotations):
-            annotations[index] = bbox
+            annotations[index] = annotation
             self.save_annotations(label_path, annotations)
             return True
         return False
