@@ -1,0 +1,347 @@
+"""
+Main Window - Application main interface
+"""
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QMenuBar, QFileDialog, QMessageBox, QSplitter,
+                             QStatusBar)
+from PyQt6.QtCore import Qt
+from pathlib import Path
+
+from ui.widgets.image_viewer import ImageViewer
+from ui.widgets.label_widget import LabelWidget
+from ui.widgets.class_manager import ClassManagerWidget
+from ui.widgets.dataset_widget import DatasetWidget
+from ui.widgets.training_widget import TrainingWidget
+from ui.widgets.metrics_widget import MetricsWidget
+from ui.dialogs.new_project_dialog import NewProjectDialog
+from ui.dialogs.export_dialog import ExportDialog
+
+from core.dataset_manager import DatasetManager
+from core.label_manager import LabelManager, BoundingBox
+from core.model_trainer import ModelTrainer
+from core.export_manager import ExportManager
+from config.settings import Settings
+
+
+class MainWindow(QMainWindow):
+    """Main application window"""
+
+    def __init__(self):
+        super().__init__()
+        self.project_path = None
+        self.dataset_manager = None
+        self.label_manager = None
+        self.model_trainer = None
+        self.current_image = None
+        self.classes = []
+
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize UI"""
+        self.setWindowTitle(Settings.APP_NAME)
+        self.setGeometry(100, 100,
+                        Settings.UI_SETTINGS['window_width'],
+                        Settings.UI_SETTINGS['window_height'])
+
+        # Create menu bar
+        self.create_menu_bar()
+
+        # Create central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+
+        # Main layout
+        main_layout = QHBoxLayout()
+
+        # Left panel - Image viewer
+        self.image_viewer = ImageViewer()
+        self.image_viewer.box_added.connect(self.on_box_added)
+
+        # Right panel - Tools
+        right_panel = QWidget()
+        right_layout = QVBoxLayout()
+
+        # Class manager
+        self.class_manager = ClassManagerWidget()
+        self.class_manager.class_added.connect(self.on_class_added)
+        self.class_manager.class_deleted.connect(self.on_class_deleted)
+        self.class_manager.class_selected.connect(self.on_class_selected)
+        right_layout.addWidget(self.class_manager)
+
+        # Dataset browser
+        self.dataset_widget = DatasetWidget()
+        self.dataset_widget.image_selected.connect(self.load_image)
+        right_layout.addWidget(self.dataset_widget)
+
+        # Label widget
+        self.label_widget = LabelWidget()
+        self.label_widget.delete_annotation.connect(self.on_delete_annotation)
+        right_layout.addWidget(self.label_widget)
+
+        right_panel.setLayout(right_layout)
+        right_panel.setMaximumWidth(300)
+
+        # Bottom panel - Training
+        bottom_panel = QWidget()
+        bottom_layout = QHBoxLayout()
+
+        self.training_widget = TrainingWidget()
+        self.training_widget.start_training.connect(self.on_start_training)
+        self.training_widget.stop_training.connect(self.on_stop_training)
+        bottom_layout.addWidget(self.training_widget)
+
+        self.metrics_widget = MetricsWidget()
+        bottom_layout.addWidget(self.metrics_widget)
+
+        bottom_panel.setLayout(bottom_layout)
+
+        # Splitters
+        v_splitter = QSplitter(Qt.Orientation.Vertical)
+        v_splitter.addWidget(self.image_viewer)
+        v_splitter.addWidget(bottom_panel)
+        v_splitter.setStretchFactor(0, 3)
+        v_splitter.setStretchFactor(1, 1)
+
+        h_splitter = QSplitter(Qt.Orientation.Horizontal)
+        h_splitter.addWidget(v_splitter)
+        h_splitter.addWidget(right_panel)
+        h_splitter.setStretchFactor(0, 3)
+        h_splitter.setStretchFactor(1, 1)
+
+        main_layout.addWidget(h_splitter)
+        central_widget.setLayout(main_layout)
+
+        # Status bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Ready")
+
+    def create_menu_bar(self):
+        """Create menu bar"""
+        menubar = self.menuBar()
+
+        # File menu
+        file_menu = menubar.addMenu("File")
+        file_menu.addAction("New Project", self.new_project)
+        file_menu.addAction("Open Project", self.open_project)
+        file_menu.addAction("Save", self.save_project)
+        file_menu.addSeparator()
+        file_menu.addAction("Import Images", self.import_images)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.close)
+
+        # Dataset menu
+        dataset_menu = menubar.addMenu("Dataset")
+        dataset_menu.addAction("Split Dataset", self.split_dataset)
+        dataset_menu.addAction("Statistics", self.show_statistics)
+
+        # Training menu
+        training_menu = menubar.addMenu("Training")
+        training_menu.addAction("Start Training", self.on_start_training)
+        training_menu.addAction("Export Model", self.export_model)
+
+        # Help menu
+        help_menu = menubar.addMenu("Help")
+        help_menu.addAction("About", self.show_about)
+
+    def new_project(self):
+        """Create new project"""
+        dialog = NewProjectDialog(self)
+        if dialog.exec():
+            info = dialog.get_project_info()
+            self.project_path = info['path']
+
+            # Create project structure
+            Settings.create_project_structure(self.project_path)
+
+            # Initialize managers
+            self.dataset_manager = DatasetManager(self.project_path)
+            self.label_manager = LabelManager(self.project_path)
+            self.model_trainer = ModelTrainer(self.project_path)
+
+            self.status_bar.showMessage(f"Project created: {info['name']}")
+
+    def open_project(self):
+        """Open existing project"""
+        path = QFileDialog.getExistingDirectory(self, "Open Project")
+        if path:
+            self.project_path = Path(path)
+            self.dataset_manager = DatasetManager(self.project_path)
+            self.label_manager = LabelManager(self.project_path)
+            self.model_trainer = ModelTrainer(self.project_path)
+
+            # Load project data
+            self.load_project_data()
+
+    def save_project(self):
+        """Save current project"""
+        if self.current_image and self.label_manager:
+            label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
+            annotations = self.image_viewer.annotations
+            self.label_manager.save_annotations(label_path, annotations)
+            self.status_bar.showMessage("Saved")
+
+    def import_images(self):
+        """Import images to project"""
+        if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning", "Please create or open a project first")
+            return
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Import Images", "",
+            "Images (*.jpg *.jpeg *.png *.bmp)"
+        )
+
+        if files:
+            stats = self.dataset_manager.import_images(files)
+            QMessageBox.information(
+                self, "Import Complete",
+                f"Imported: {stats['imported']}\nSkipped: {stats['skipped']}"
+            )
+            self.refresh_dataset()
+
+    def load_image(self, image_path: str):
+        """Load image in viewer"""
+        self.current_image = Path(image_path)
+        self.image_viewer.load_image(self.current_image)
+
+        # Load annotations
+        if self.label_manager:
+            label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
+            annotations = self.label_manager.load_annotations(label_path)
+            self.image_viewer.set_annotations(annotations)
+            self.label_widget.update_annotations(annotations)
+
+    def on_box_added(self, x1, y1, x2, y2, class_id):
+        """Handle new bounding box"""
+        if not self.label_manager or not self.current_image:
+            return
+
+        img_width, img_height = self.image_viewer.pixmap.width(), self.image_viewer.pixmap.height()
+        bbox = BoundingBox.from_absolute(class_id, x1, y1, x2, y2, img_width, img_height)
+
+        label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
+        self.label_manager.add_annotation(label_path, bbox)
+
+        # Reload annotations
+        annotations = self.label_manager.load_annotations(label_path)
+        self.image_viewer.set_annotations(annotations)
+        self.label_widget.update_annotations(annotations)
+
+    def on_delete_annotation(self, index):
+        """Delete annotation"""
+        if not self.label_manager or not self.current_image:
+            return
+
+        label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
+        self.label_manager.delete_annotation(label_path, index)
+
+        annotations = self.label_manager.load_annotations(label_path)
+        self.image_viewer.set_annotations(annotations)
+        self.label_widget.update_annotations(annotations)
+
+    def on_class_added(self, class_name):
+        """Add new class"""
+        self.classes.append(class_name)
+        self.class_manager.set_classes(self.classes)
+        if self.label_manager:
+            self.label_manager.set_classes(self.classes)
+            self.image_viewer.set_classes(self.classes, self.label_manager.class_colors)
+
+    def on_class_deleted(self, index):
+        """Delete class"""
+        if 0 <= index < len(self.classes):
+            del self.classes[index]
+            self.class_manager.set_classes(self.classes)
+
+    def on_class_selected(self, class_id):
+        """Class selected"""
+        self.image_viewer.set_current_class(class_id)
+
+    def split_dataset(self):
+        """Split dataset into train/val/test"""
+        if not self.dataset_manager:
+            return
+
+        stats = self.dataset_manager.split_dataset()
+        QMessageBox.information(
+            self, "Split Complete",
+            f"Train: {stats.get('train', 0)}\n"
+            f"Val: {stats.get('val', 0)}\n"
+            f"Test: {stats.get('test', 0)}"
+        )
+
+    def show_statistics(self):
+        """Show dataset statistics"""
+        if not self.dataset_manager:
+            return
+
+        stats = self.dataset_manager.get_dataset_statistics()
+        msg = f"Total Images: {stats['total_images']}\n"
+        msg += f"Train: {stats['train_images']}\n"
+        msg += f"Val: {stats['val_images']}\n"
+        msg += f"Test: {stats['test_images']}\n"
+        msg += f"Annotations: {stats['total_annotations']}"
+
+        QMessageBox.information(self, "Dataset Statistics", msg)
+
+    def on_start_training(self, config=None):
+        """Start training"""
+        if not self.model_trainer or not self.dataset_manager:
+            return
+
+        # Create data.yaml
+        data_yaml = self.dataset_manager.create_data_yaml(self.classes)
+
+        # Start training
+        self.model_trainer.start_training(
+            config or {},
+            data_yaml
+        )
+
+    def on_stop_training(self):
+        """Stop training"""
+        if self.model_trainer:
+            self.model_trainer.stop_training()
+
+    def export_model(self):
+        """Export trained model"""
+        if not self.model_trainer:
+            return
+
+        best_weights = self.model_trainer.get_best_weights_path()
+        if not best_weights or not best_weights.exists():
+            QMessageBox.warning(self, "Warning", "No trained model found")
+            return
+
+        dialog = ExportDialog(self)
+        if dialog.exec():
+            formats = dialog.get_selected_formats()
+            if formats:
+                export_mgr = ExportManager(best_weights)
+                results = export_mgr.export_multiple(formats)
+
+                QMessageBox.information(
+                    self, "Export Complete",
+                    f"Exported to {len(results)} formats"
+                )
+
+    def refresh_dataset(self):
+        """Refresh dataset view"""
+        if self.dataset_manager:
+            self.dataset_manager.refresh_images_list()
+            self.dataset_widget.set_images(self.dataset_manager.images_list)
+
+    def load_project_data(self):
+        """Load project data"""
+        self.refresh_dataset()
+        self.status_bar.showMessage(f"Loaded project: {self.project_path.name}")
+
+    def show_about(self):
+        """Show about dialog"""
+        QMessageBox.about(
+            self, "About",
+            f"{Settings.APP_NAME} v{Settings.APP_VERSION}\n"
+            "YOLOv8 Training Tool for object detection"
+        )
