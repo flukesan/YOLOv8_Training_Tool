@@ -453,11 +453,18 @@ class MainWindow(QMainWindow):
 
         # Start training
         try:
+            # Extract model from config if provided, otherwise use default
+            model_name = (config or {}).get('model', 'yolov8s.pt')
+
+            # Remove 'model' from config as it's passed separately
+            train_config = {k: v for k, v in (config or {}).items() if k != 'model'}
+
             self.model_trainer.start_training(
-                config or {},
-                data_yaml
+                train_config,
+                data_yaml,
+                model_name=model_name
             )
-            self.status_bar.showMessage("Training started...")
+            self.status_bar.showMessage(f"Training started with {model_name}...")
         except Exception as e:
             QMessageBox.critical(self, "Training Error", f"Failed to start training:\n{str(e)}")
 
