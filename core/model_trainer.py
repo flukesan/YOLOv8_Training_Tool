@@ -322,30 +322,66 @@ class ModelTrainer:
 
     def get_best_weights_path(self) -> Optional[Path]:
         """Get path to best weights from last training"""
-        if self.current_session is None:
+        # First, try to get from current session if available
+        if self.current_session is not None:
+            project_dir = Path(self.current_session.config.get('project',
+                              self.project_path / 'runs' / 'train'))
+            name = self.current_session.config.get('name', 'exp')
+
+            best_weights = project_dir / name / 'weights' / 'best.pt'
+            if best_weights.exists():
+                return best_weights
+
+        # Fallback: Search for most recent training run
+        runs_dir = self.project_path / 'runs' / 'train'
+        if not runs_dir.exists():
             return None
 
-        project_dir = Path(self.current_session.config.get('project',
-                          self.project_path / 'runs' / 'train'))
-        name = self.current_session.config.get('name', 'exp')
+        # Find all training runs
+        training_runs = []
+        for run_dir in runs_dir.iterdir():
+            if run_dir.is_dir():
+                best_weights = run_dir / 'weights' / 'best.pt'
+                if best_weights.exists():
+                    # Get modification time for sorting
+                    training_runs.append((best_weights, best_weights.stat().st_mtime))
 
-        best_weights = project_dir / name / 'weights' / 'best.pt'
-        if best_weights.exists():
-            return best_weights
+        if not training_runs:
+            return None
 
-        return None
+        # Return the most recent weights file
+        training_runs.sort(key=lambda x: x[1], reverse=True)
+        return training_runs[0][0]
 
     def get_last_weights_path(self) -> Optional[Path]:
         """Get path to last weights from last training"""
-        if self.current_session is None:
+        # First, try to get from current session if available
+        if self.current_session is not None:
+            project_dir = Path(self.current_session.config.get('project',
+                              self.project_path / 'runs' / 'train'))
+            name = self.current_session.config.get('name', 'exp')
+
+            last_weights = project_dir / name / 'weights' / 'last.pt'
+            if last_weights.exists():
+                return last_weights
+
+        # Fallback: Search for most recent training run
+        runs_dir = self.project_path / 'runs' / 'train'
+        if not runs_dir.exists():
             return None
 
-        project_dir = Path(self.current_session.config.get('project',
-                          self.project_path / 'runs' / 'train'))
-        name = self.current_session.config.get('name', 'exp')
+        # Find all training runs
+        training_runs = []
+        for run_dir in runs_dir.iterdir():
+            if run_dir.is_dir():
+                last_weights = run_dir / 'weights' / 'last.pt'
+                if last_weights.exists():
+                    # Get modification time for sorting
+                    training_runs.append((last_weights, last_weights.stat().st_mtime))
 
-        last_weights = project_dir / name / 'weights' / 'last.pt'
-        if last_weights.exists():
-            return last_weights
+        if not training_runs:
+            return None
 
-        return None
+        # Return the most recent weights file
+        training_runs.sort(key=lambda x: x[1], reverse=True)
+        return training_runs[0][0]
