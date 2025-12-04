@@ -140,6 +140,13 @@ class ImageViewer(QWidget):
         self.pixmap = QPixmap(str(image_path))
         self.update_display()
 
+    def clear_image(self):
+        """Clear the current image"""
+        self.image_path = None
+        self.pixmap = None
+        self.annotations = []
+        self.image_label.clear()
+
     def set_annotations(self, annotations: List):
         """Set annotations"""
         self.annotations = annotations
