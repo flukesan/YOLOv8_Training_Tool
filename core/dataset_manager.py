@@ -153,8 +153,12 @@ class DatasetManager:
         else:
             self.images_list = []
 
-    def get_dataset_statistics(self) -> Dict:
-        """Get statistics about the dataset"""
+    def get_dataset_statistics(self, class_names: List[str] = None) -> Dict:
+        """Get statistics about the dataset
+
+        Args:
+            class_names: List of class names (optional)
+        """
         stats = {
             'total_images': 0,
             'train_images': 0,
@@ -174,12 +178,17 @@ class DatasetManager:
                 stats['total_images'] += count
 
         # Count annotations and class distribution
-        self._count_annotations(stats)
+        self._count_annotations(stats, class_names)
 
         return stats
 
-    def _count_annotations(self, stats: Dict):
-        """Count annotations and class distribution"""
+    def _count_annotations(self, stats: Dict, class_names: List[str] = None):
+        """Count annotations and class distribution
+
+        Args:
+            stats: Statistics dictionary to update
+            class_names: List of class names (optional)
+        """
         for split in ['train', 'val', 'test']:
             labels_dir = self.structure[split] / 'labels'
             if not labels_dir.exists():
@@ -194,7 +203,15 @@ class DatasetManager:
                         parts = line.strip().split()
                         if parts:
                             class_id = int(parts[0])
-                            stats['classes'][class_id] = stats['classes'].get(class_id, 0) + 1
+
+                            # Initialize class entry if not exists
+                            if class_id not in stats['classes']:
+                                stats['classes'][class_id] = {
+                                    'count': 0,
+                                    'name': class_names[class_id] if class_names and class_id < len(class_names) else f'Class {class_id}'
+                                }
+
+                            stats['classes'][class_id]['count'] += 1
 
     def create_data_yaml(self, classes: List[str], save_path: Path = None) -> Path:
         """

@@ -17,6 +17,7 @@ from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.export_dialog import ExportDialog
 from ui.dialogs.split_dataset_dialog import SplitDatasetDialog
 from ui.dialogs.training_results_dialog import TrainingResultsDialog
+from ui.dialogs.dataset_statistics_dialog import DatasetStatisticsDialog
 
 from core.dataset_manager import DatasetManager
 from core.label_manager import LabelManager, BoundingBox, Polygon
@@ -411,16 +412,27 @@ class MainWindow(QMainWindow):
     def show_statistics(self):
         """Show dataset statistics"""
         if not self.dataset_manager:
+            QMessageBox.warning(
+                self,
+                "No Project",
+                "Please create or open a project first to view statistics."
+            )
             return
 
-        stats = self.dataset_manager.get_dataset_statistics()
-        msg = f"Total Images: {stats['total_images']}\n"
-        msg += f"Train: {stats['train_images']}\n"
-        msg += f"Val: {stats['val_images']}\n"
-        msg += f"Test: {stats['test_images']}\n"
-        msg += f"Annotations: {stats['total_annotations']}"
+        if not self.project_path:
+            QMessageBox.warning(
+                self,
+                "No Project",
+                "Please create or open a project first to view statistics."
+            )
+            return
 
-        QMessageBox.information(self, "Dataset Statistics", msg)
+        # Get statistics with class names
+        stats = self.dataset_manager.get_dataset_statistics(self.classes)
+
+        # Show comprehensive statistics dialog
+        dialog = DatasetStatisticsDialog(stats, self.project_path, self)
+        dialog.exec()
 
     def on_start_training(self, config=None):
         """Start training"""
