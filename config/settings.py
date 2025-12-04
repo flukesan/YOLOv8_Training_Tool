@@ -24,11 +24,11 @@ class Settings:
     DEFAULT_PROJECTS_DIR = Path.home() / "YOLOv8_Projects"
     DEFAULT_MODELS_DIR = Path.home() / "YOLOv8_Models"
 
-    # Training defaults
+    # Training defaults (Updated for Ultralytics 8.3.x API)
     DEFAULT_TRAIN_PARAMS = {
         'epochs': 100,
-        'batch_size': 16,
-        'img_size': 640,
+        'batch': 16,              # Changed from 'batch_size'
+        'imgsz': 640,             # Changed from 'img_size'
         'patience': 50,
         'lr0': 0.01,
         'lrf': 0.01,
@@ -47,25 +47,17 @@ class Settings:
         'single_cls': False,
         'rect': False,
         'resume': False,
-        'nosave': False,
-        'noval': False,
-        'noautoanchor': False,
-        'noplots': False,
-        'evolve': None,
-        'bucket': '',
         'cache': None,
-        'image_weights': False,
         'device': '',
         'workers': 8,
         'project': None,
         'name': None,
         'exist_ok': False,
-        'quad': False,
-        'linear_lr': False,
         'label_smoothing': 0.0,
         'save_period': -1,
         'seed': 0,
-        'local_rank': -1,
+        # Removed deprecated parameters: nosave, noval, noautoanchor, noplots,
+        # evolve, bucket, image_weights, quad, linear_lr, local_rank
     }
 
     # Dataset split ratios
