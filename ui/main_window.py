@@ -569,12 +569,40 @@ class MainWindow(QMainWindow):
                 return
 
             try:
+                import shutil
+                import time
+
                 # Show progress message
                 self.status_bar.showMessage("Exporting model...")
 
-                # Export model
-                export_mgr = ExportManager(best_weights)
-                results = export_mgr.export_multiple(formats)
+                results = {}
+
+                # Handle .pt format separately (just copy)
+                if 'pt' in formats:
+                    try:
+                        # Copy to models directory
+                        models_dir = self.project_path / 'models'
+                        models_dir.mkdir(parents=True, exist_ok=True)
+
+                        dest_path = models_dir / f"best_{int(time.time())}.pt"
+                        shutil.copy2(best_weights, dest_path)
+
+                        results['pt'] = {
+                            'success': True,
+                            'path': str(dest_path)
+                        }
+                    except Exception as e:
+                        results['pt'] = {
+                            'success': False,
+                            'error': str(e)
+                        }
+
+                # Handle other formats using ExportManager
+                other_formats = [f for f in formats if f != 'pt']
+                if other_formats:
+                    export_mgr = ExportManager(best_weights)
+                    export_results = export_mgr.export_multiple(other_formats)
+                    results.update(export_results)
 
                 # Show success message
                 success_count = sum(1 for r in results.values() if r.get('success'))
@@ -584,15 +612,19 @@ class MainWindow(QMainWindow):
                     msg = f"Successfully exported model to {success_count} format(s):\n\n"
                     for fmt, result in results.items():
                         if result.get('success'):
-                            msg += f"✓ {fmt.upper()}: {result.get('path', 'N/A')}\n"
+                            path = result.get('path', 'N/A')
+                            msg += f"✓ {fmt.upper()}: {path}\n"
 
                     QMessageBox.information(self, "Export Complete", msg)
                     self.status_bar.showMessage("Model export completed")
                 else:
                     msg = f"Export completed with {failed_count} error(s):\n\n"
                     for fmt, result in results.items():
-                        status = "✓" if result.get('success') else "✗"
-                        msg += f"{status} {fmt.upper()}\n"
+                        if result.get('success'):
+                            msg += f"✓ {fmt.upper()}: {result.get('path', 'N/A')}\n"
+                        else:
+                            error = result.get('error', 'Unknown error')
+                            msg += f"✗ {fmt.upper()}: {error}\n"
 
                     QMessageBox.warning(self, "Export Completed with Errors", msg)
                     self.status_bar.showMessage("Model export completed with errors")
