@@ -270,7 +270,7 @@ class ImageViewer(QWidget):
             return
 
         # Get position relative to scroll area content
-        widget_pos = self.image_label.mapFromGlobal(event.globalPos())
+        widget_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
         img_pos = self.get_image_coordinates(widget_pos)
 
         if img_pos is None:
@@ -297,7 +297,7 @@ class ImageViewer(QWidget):
         if not self.pixmap:
             return
 
-        widget_pos = self.image_label.mapFromGlobal(event.globalPos())
+        widget_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
         img_pos = self.get_image_coordinates(widget_pos)
 
         if img_pos is None:
