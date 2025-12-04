@@ -4,6 +4,7 @@ Training Widget - training controls
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel,
                              QSpinBox, QDoubleSpinBox, QFormLayout, QGroupBox)
 from PyQt6.QtCore import pyqtSignal
+from config.settings import Settings
 
 
 class TrainingWidget(QWidget):
@@ -30,19 +31,22 @@ class TrainingWidget(QWidget):
         param_group = QGroupBox("Parameters")
         param_layout = QFormLayout()
 
+        # Get default values from Settings
+        default_params = Settings.DEFAULT_TRAIN_PARAMS
+
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(1, 1000)
-        self.epochs_spin.setValue(100)
+        self.epochs_spin.setValue(default_params.get('epochs', 100))
         param_layout.addRow("Epochs:", self.epochs_spin)
 
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(1, 128)
-        self.batch_spin.setValue(16)
+        self.batch_spin.setValue(default_params.get('batch', 16))
         param_layout.addRow("Batch Size:", self.batch_spin)
 
         self.lr_spin = QDoubleSpinBox()
         self.lr_spin.setRange(0.0001, 0.1)
-        self.lr_spin.setValue(0.01)
+        self.lr_spin.setValue(default_params.get('lr0', 0.01))
         self.lr_spin.setDecimals(4)
         param_layout.addRow("Learning Rate:", self.lr_spin)
 
