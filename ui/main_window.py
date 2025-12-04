@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         # Dataset browser
         self.dataset_widget = DatasetWidget()
         self.dataset_widget.image_selected.connect(self.load_image)
+        self.dataset_widget.images_deleted.connect(self.on_images_deleted)
         right_layout.addWidget(self.dataset_widget)
 
         # Label widget
@@ -213,6 +214,53 @@ class MainWindow(QMainWindow):
             annotations = self.label_manager.load_annotations(label_path)
             self.image_viewer.set_annotations(annotations)
             self.label_widget.update_annotations(annotations)
+
+    def on_images_deleted(self, image_paths):
+        """Handle deletion of images"""
+        import os
+
+        if not image_paths:
+            return
+
+        deleted_count = 0
+        error_count = 0
+
+        for image_path in image_paths:
+            try:
+                image_path = Path(image_path)
+
+                # Delete image file
+                if image_path.exists():
+                    os.remove(image_path)
+
+                # Delete corresponding label file
+                label_path = image_path.parent.parent / 'labels' / f"{image_path.stem}.txt"
+                if label_path.exists():
+                    os.remove(label_path)
+
+                deleted_count += 1
+
+                # Clear viewer if current image was deleted
+                if self.current_image and self.current_image == image_path:
+                    self.image_viewer.clear_image()
+                    self.current_image = None
+
+            except Exception as e:
+                print(f"Error deleting {image_path}: {e}")
+                error_count += 1
+
+        # Refresh dataset
+        self.refresh_dataset()
+
+        # Show result message
+        if error_count == 0:
+            self.status_bar.showMessage(f"Deleted {deleted_count} image(s)")
+        else:
+            QMessageBox.warning(
+                self,
+                "Delete Complete",
+                f"Deleted: {deleted_count}\nErrors: {error_count}"
+            )
 
     def on_box_added(self, x1, y1, x2, y2, class_id):
         """Handle new bounding box"""
