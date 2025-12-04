@@ -45,10 +45,22 @@ class LabelWidget(QWidget):
         self.annotations = annotations
         self.annotation_list.clear()
 
-        for i, bbox in enumerate(annotations):
-            self.annotation_list.addItem(
-                f"Box {i+1}: Class {bbox.class_id}"
-            )
+        for i, ann in enumerate(annotations):
+            if hasattr(ann, 'annotation_type'):
+                if ann.annotation_type == 'box':
+                    self.annotation_list.addItem(
+                        f"Box {i+1}: Class {ann.class_id}"
+                    )
+                elif ann.annotation_type == 'polygon':
+                    num_points = len(ann.points) if hasattr(ann, 'points') else 0
+                    self.annotation_list.addItem(
+                        f"Polygon {i+1}: Class {ann.class_id} ({num_points} pts)"
+                    )
+            else:
+                # Fallback for old annotations
+                self.annotation_list.addItem(
+                    f"Annotation {i+1}: Class {ann.class_id}"
+                )
 
     def _on_annotation_selected(self, item):
         """Handle annotation selection"""
