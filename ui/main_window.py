@@ -18,6 +18,7 @@ from ui.dialogs.export_dialog import ExportDialog
 from ui.dialogs.split_dataset_dialog import SplitDatasetDialog
 from ui.dialogs.training_results_dialog import TrainingResultsDialog
 from ui.dialogs.dataset_statistics_dialog import DatasetStatisticsDialog
+from ui.dialogs.model_testing_dialog import ModelTestingDialog
 
 from core.dataset_manager import DatasetManager
 from core.label_manager import LabelManager, BoundingBox, Polygon
@@ -156,6 +157,7 @@ class MainWindow(QMainWindow):
         training_menu.addAction("Start Training", self.on_start_training)
         training_menu.addAction("View Results", self.view_training_results)
         training_menu.addSeparator()
+        training_menu.addAction("Test Model", self.test_model)
         training_menu.addAction("Export Model", self.export_model)
 
         # Help menu
@@ -594,6 +596,20 @@ class MainWindow(QMainWindow):
             )
             import traceback
             traceback.print_exc()
+
+    def test_model(self):
+        """Test trained model on images/videos"""
+        if not self.project_path:
+            QMessageBox.warning(
+                self,
+                "No Project",
+                "Please create or open a project first to test models."
+            )
+            return
+
+        # Open model testing dialog
+        dialog = ModelTestingDialog(self.project_path, self)
+        dialog.exec()
 
     def export_model(self):
         """Export trained model"""
