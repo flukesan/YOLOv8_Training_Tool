@@ -269,7 +269,11 @@ class ImageViewer(QWidget):
         if img_x < 0 or img_y < 0 or img_x >= displayed_width or img_y >= displayed_height:
             return None
 
-        return QPoint(img_x, img_y)
+        # Convert from zoomed coordinates to original image coordinates
+        original_x = int(img_x / self.zoom_factor)
+        original_y = int(img_y / self.zoom_factor)
+
+        return QPoint(original_x, original_y)
 
     def mousePressEvent(self, event):
         """Handle mouse press for drawing"""
@@ -330,11 +334,11 @@ class ImageViewer(QWidget):
         if not self.start_point or not self.current_rect:
             return
 
-        # Convert to image coordinates
-        x1 = int(self.current_rect.x() / self.zoom_factor)
-        y1 = int(self.current_rect.y() / self.zoom_factor)
-        x2 = int(self.current_rect.right() / self.zoom_factor)
-        y2 = int(self.current_rect.bottom() / self.zoom_factor)
+        # Coordinates are already in original image space (converted in get_image_coordinates)
+        x1 = int(self.current_rect.x())
+        y1 = int(self.current_rect.y())
+        x2 = int(self.current_rect.right())
+        y2 = int(self.current_rect.bottom())
 
         # Emit signal
         self.box_added.emit(x1, y1, x2, y2, self.current_class)
@@ -350,11 +354,11 @@ class ImageViewer(QWidget):
         if len(self.current_polygon_points) < 3:
             return
 
-        # Convert to image coordinates
+        # Coordinates are already in original image space (converted in get_image_coordinates)
         points = []
         for point in self.current_polygon_points:
-            x = int(point.x() / self.zoom_factor)
-            y = int(point.y() / self.zoom_factor)
+            x = int(point.x())
+            y = int(point.y())
             points.append((x, y))
 
         # Emit signal
