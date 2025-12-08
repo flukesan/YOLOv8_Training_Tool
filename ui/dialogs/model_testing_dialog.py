@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QFileDialog, QGroupBox, QFormLayout,
                              QDoubleSpinBox, QTextEdit, QTabWidget, QWidget,
                              QListWidget, QListWidgetItem, QMessageBox, QProgressBar,
-                             QComboBox, QSpinBox)
+                             QComboBox, QSpinBox, QScrollArea)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QFont, QImage
 import cv2
