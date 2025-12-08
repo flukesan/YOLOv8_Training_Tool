@@ -366,6 +366,13 @@ class ModelTestingDialog(QDialog):
         group = QGroupBox("Detection Results")
         layout = QVBoxLayout()
 
+        # Create tabs for text and image results
+        self.results_tabs = QTabWidget()
+
+        # Text results tab
+        text_widget = QWidget()
+        text_layout = QVBoxLayout()
+
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
         self.results_text.setMinimumHeight(200)
@@ -376,9 +383,55 @@ class ModelTestingDialog(QDialog):
             "• Detected classes and confidence scores\n"
             "• Overall statistics"
         )
-        layout.addWidget(self.results_text)
+        text_layout.addWidget(self.results_text)
+        text_widget.setLayout(text_layout)
+
+        # Image results tab
+        image_widget = QWidget()
+        image_layout = QVBoxLayout()
+
+        # Image navigation
+        nav_layout = QHBoxLayout()
+        self.btn_prev_image = QPushButton("◀ Previous")
+        self.btn_prev_image.clicked.connect(self.show_previous_image)
+        self.btn_prev_image.setEnabled(False)
+
+        self.image_index_label = QLabel("No images")
+        self.image_index_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_next_image = QPushButton("Next ▶")
+        self.btn_next_image.clicked.connect(self.show_next_image)
+        self.btn_next_image.setEnabled(False)
+
+        nav_layout.addWidget(self.btn_prev_image)
+        nav_layout.addWidget(self.image_index_label, 1)
+        nav_layout.addWidget(self.btn_next_image)
+        image_layout.addLayout(nav_layout)
+
+        # Image display with scroll area
+        self.result_image_label = QLabel()
+        self.result_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.result_image_label.setMinimumHeight(300)
+
+        scroll = QScrollArea()
+        scroll.setWidget(self.result_image_label)
+        scroll.setWidgetResizable(True)
+        image_layout.addWidget(scroll)
+
+        image_widget.setLayout(image_layout)
+
+        # Add tabs
+        self.results_tabs.addTab(text_widget, "📝 Text Results")
+        self.results_tabs.addTab(image_widget, "🖼️ Image Results")
+
+        layout.addWidget(self.results_tabs)
 
         group.setLayout(layout)
+
+        # Store for annotated images
+        self.annotated_images = []
+        self.current_image_index = 0
+
         return group
 
     def load_available_models(self):
@@ -580,6 +633,15 @@ class ModelTestingDialog(QDialog):
                 for i, (box, score, cls) in enumerate(zip(result['boxes'], result['scores'], result['classes']), 1):
                     self.results_text.append(f"   [{i}] Class {int(cls)} - Confidence: {score:.2%}")
 
+            # Draw bounding boxes on image
+            annotated_image = self.draw_detections(result)
+            if annotated_image is not None:
+                self.annotated_images.append({
+                    'image': annotated_image,
+                    'path': result['image_path'],
+                    'detections': num_detections
+                })
+
         elif result['type'] == 'video':
             file_name = Path(result['file_path']).name
             self.results_text.append(f"\n{'='*60}")
@@ -587,6 +649,57 @@ class ModelTestingDialog(QDialog):
             self.results_text.append(f"   Total Frames: {result['total_frames']}")
             self.results_text.append(f"   Avg Detections/Frame: {result['avg_detections']:.2f}")
             self.results_text.append(f"   Classes Detected: {result['classes_detected']}")
+
+    def draw_detections(self, result: dict):
+        """Draw bounding boxes on image"""
+        try:
+            import cv2
+
+            # Load image
+            img_path = result['image_path']
+            img = cv2.imread(str(img_path))
+
+            if img is None:
+                return None
+
+            h, w = img.shape[:2]
+
+            # Draw each detection
+            for box, score, cls in zip(result['boxes'], result['scores'], result['classes']):
+                # Convert normalized coordinates to absolute
+                x_center, y_center, width, height = box
+                x1 = int((x_center - width / 2) * w)
+                y1 = int((y_center - height / 2) * h)
+                x2 = int((x_center + width / 2) * w)
+                y2 = int((y_center + height / 2) * h)
+
+                # Choose color based on class
+                colors = [
+                    (0, 255, 0),    # Green for class 0
+                    (0, 0, 255),    # Red for class 1
+                    (255, 0, 0),    # Blue for class 2
+                    (255, 255, 0),  # Cyan for class 3
+                    (255, 0, 255),  # Magenta for class 4
+                ]
+                color = colors[int(cls) % len(colors)]
+
+                # Draw rectangle
+                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+
+                # Draw label
+                label = f"Class {int(cls)}: {score:.2f}"
+                label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                cv2.rectangle(img, (x1, y1 - label_size[1] - 4), (x1 + label_size[0], y1), color, -1)
+                cv2.putText(img, label, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            # Convert BGR to RGB
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+            return img_rgb
+
+        except Exception as e:
+            print(f"Error drawing detections: {e}")
+            return None
 
     def on_inference_finished(self, is_video: bool):
         """Handle inference completion"""
@@ -611,6 +724,12 @@ class ModelTestingDialog(QDialog):
             self.results_text.append(f"   Total Detections: {total_detections}")
             self.results_text.append(f"   Avg Detections/Image: {avg_detections:.2f}")
 
+            # Show first annotated image
+            if self.annotated_images:
+                self.current_image_index = 0
+                self.show_current_image()
+                self.update_navigation_buttons()
+
         QMessageBox.information(
             self,
             "Testing Complete",
@@ -629,7 +748,63 @@ class ModelTestingDialog(QDialog):
 
         QMessageBox.critical(self, "Inference Error", f"Error during inference:\n{error_msg}")
 
+    def show_current_image(self):
+        """Display current annotated image"""
+        if not self.annotated_images or self.current_image_index >= len(self.annotated_images):
+            return
+
+        img_data = self.annotated_images[self.current_image_index]
+        img_array = img_data['image']
+
+        # Convert numpy array to QPixmap
+        h, w, ch = img_array.shape
+        bytes_per_line = ch * w
+        q_img = QImage(img_array.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_img)
+
+        # Scale to fit label while maintaining aspect ratio
+        scaled_pixmap = pixmap.scaled(
+            900, 600,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+        self.result_image_label.setPixmap(scaled_pixmap)
+
+        # Update label
+        file_name = Path(img_data['path']).name
+        self.image_index_label.setText(
+            f"Image {self.current_image_index + 1} / {len(self.annotated_images)} - "
+            f"{file_name} ({img_data['detections']} detections)"
+        )
+
+    def show_previous_image(self):
+        """Show previous image"""
+        if self.current_image_index > 0:
+            self.current_image_index -= 1
+            self.show_current_image()
+            self.update_navigation_buttons()
+
+    def show_next_image(self):
+        """Show next image"""
+        if self.current_image_index < len(self.annotated_images) - 1:
+            self.current_image_index += 1
+            self.show_current_image()
+            self.update_navigation_buttons()
+
+    def update_navigation_buttons(self):
+        """Update navigation button states"""
+        has_images = len(self.annotated_images) > 0
+
+        self.btn_prev_image.setEnabled(has_images and self.current_image_index > 0)
+        self.btn_next_image.setEnabled(has_images and self.current_image_index < len(self.annotated_images) - 1)
+
     def clear_results(self):
         """Clear results"""
         self.results_text.clear()
         self.results = []
+        self.annotated_images = []
+        self.current_image_index = 0
+        self.result_image_label.clear()
+        self.image_index_label.setText("No images")
+        self.update_navigation_buttons()
