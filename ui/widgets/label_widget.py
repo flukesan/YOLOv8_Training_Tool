@@ -1,9 +1,9 @@
 """
-Label Widget - annotation tools panel
+Label Widget - annotation tools panel with modern UI
 """
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QListWidget, QPushButton,
                              QLabel, QHBoxLayout)
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
 
 
 class LabelWidget(QWidget):
@@ -20,11 +20,19 @@ class LabelWidget(QWidget):
     def init_ui(self):
         """Initialize UI"""
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
-        # Title
+        # Title row with count
+        title_row = QHBoxLayout()
         title = QLabel("Annotations")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        layout.addWidget(title)
+        title.setStyleSheet("font-weight: bold; font-size: 15px;")
+        title_row.addWidget(title)
+
+        self.count_label = QLabel("0 annotations")
+        self.count_label.setStyleSheet("color: #8891a0; font-size: 12px;")
+        title_row.addStretch()
+        title_row.addWidget(self.count_label)
+        layout.addLayout(title_row)
 
         # Annotation list
         self.annotation_list = QListWidget()
@@ -33,7 +41,15 @@ class LabelWidget(QWidget):
 
         # Buttons
         btn_layout = QHBoxLayout()
-        self.btn_delete = QPushButton("Delete")
+        btn_layout.setSpacing(6)
+
+        self.btn_delete = QPushButton("Delete Selected")
+        self.btn_delete.setStyleSheet(
+            "QPushButton { background-color: #c0392b; color: #ffffff; "
+            "border: none; border-radius: 8px; padding: 8px 16px; "
+            "font-weight: 600; }"
+            "QPushButton:hover { background-color: #d94435; }"
+        )
         self.btn_delete.clicked.connect(self._on_delete)
         btn_layout.addWidget(self.btn_delete)
 
@@ -49,18 +65,19 @@ class LabelWidget(QWidget):
             if hasattr(ann, 'annotation_type'):
                 if ann.annotation_type == 'box':
                     self.annotation_list.addItem(
-                        f"Box {i+1}: Class {ann.class_id}"
+                        f"  [{i+1}]  Box - Class {ann.class_id}"
                     )
                 elif ann.annotation_type == 'polygon':
                     num_points = len(ann.points) if hasattr(ann, 'points') else 0
                     self.annotation_list.addItem(
-                        f"Polygon {i+1}: Class {ann.class_id} ({num_points} pts)"
+                        f"  [{i+1}]  Polygon - Class {ann.class_id} ({num_points} pts)"
                     )
             else:
-                # Fallback for old annotations
                 self.annotation_list.addItem(
-                    f"Annotation {i+1}: Class {ann.class_id}"
+                    f"  [{i+1}]  Annotation - Class {ann.class_id}"
                 )
+
+        self.count_label.setText(f"{len(annotations)} annotations")
 
     def _on_annotation_selected(self, item):
         """Handle annotation selection"""
