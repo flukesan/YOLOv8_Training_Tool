@@ -138,6 +138,8 @@ class MainWindow(QMainWindow):
         self.image_viewer = ImageViewer()
         self.image_viewer.box_added.connect(self.on_box_added)
         self.image_viewer.polygon_added.connect(self.on_polygon_added)
+        self.image_viewer.annotation_selected.connect(self.on_annotation_selected_from_viewer)
+        self.image_viewer.annotation_updated.connect(self.on_annotation_updated)
 
         # Right panel with tabs
         right_panel = QTabWidget()
@@ -169,6 +171,7 @@ class MainWindow(QMainWindow):
 
         self.label_widget = LabelWidget()
         self.label_widget.delete_annotation.connect(self.on_delete_annotation)
+        self.label_widget.annotation_selected.connect(self.on_annotation_selected_from_list)
         ann_layout.addWidget(self.label_widget)
 
         ann_tab.setLayout(ann_layout)
@@ -501,6 +504,23 @@ class MainWindow(QMainWindow):
         self.image_viewer.set_annotations(annotations)
         self.label_widget.update_annotations(annotations)
 
+    def on_annotation_selected_from_viewer(self, index):
+        """Handle annotation selected in ImageViewer → highlight in LabelWidget"""
+        self.label_widget.select_annotation(index)
+
+    def on_annotation_selected_from_list(self, index):
+        """Handle annotation selected in LabelWidget → highlight in ImageViewer"""
+        self.image_viewer.select_annotation(index)
+
+    def on_annotation_updated(self, index):
+        """Handle annotation moved/resized in ImageViewer → save to file"""
+        if not self.label_manager or not self.current_image:
+            return
+        label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
+        self.label_manager.save_annotations(label_path, self.image_viewer.annotations)
+        self.label_widget.update_annotations(self.image_viewer.annotations)
+        self.label_widget.select_annotation(index)
+
     def on_class_added(self, class_name):
         """Add new class"""
         self.classes.append(class_name)
@@ -508,6 +528,7 @@ class MainWindow(QMainWindow):
         if self.label_manager:
             self.label_manager.set_classes(self.classes)
             self.image_viewer.set_classes(self.classes, self.label_manager.class_colors)
+            self.label_widget.set_classes(self.classes, self.label_manager.class_colors)
         self.save_classes_to_config()
 
     def on_class_deleted(self, index):
@@ -867,6 +888,9 @@ class MainWindow(QMainWindow):
                     if self.label_manager:
                         self.label_manager.set_classes(self.classes)
                         self.image_viewer.set_classes(
+                            self.classes, self.label_manager.class_colors
+                        )
+                        self.label_widget.set_classes(
                             self.classes, self.label_manager.class_colors
                         )
             except Exception as e:
