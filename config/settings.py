@@ -192,12 +192,19 @@ class Settings:
         'YOLOv8x': 'yolov8x.pt',
     }
 
+    # Keys that should be persisted in training config
+    TRAINING_CONFIG_KEYS = [
+        'model', 'epochs', 'batch', 'imgsz', 'lr0', 'optimizer',
+        'patience', 'cos_lr', 'amp', 'multi_scale', 'workers', 'seed',
+        'device', 'cache', 'freeze',
+    ]
+
     @classmethod
     def load_settings(cls, config_path: str = None) -> Dict[str, Any]:
         """Load settings from config file"""
         if config_path and os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f)
+                return yaml.safe_load(f) or {}
         return {}
 
     @classmethod
@@ -206,6 +213,31 @@ class Settings:
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, 'w', encoding='utf-8') as f:
             yaml.dump(settings, f, default_flow_style=False)
+
+    @classmethod
+    def save_training_config(cls, config: Dict[str, Any], project_path: Path):
+        """Save training configuration to project's config.yaml"""
+        config_path = project_path / 'config.yaml'
+
+        # Load existing config
+        existing = cls.load_settings(str(config_path))
+
+        # Save only relevant training keys
+        training_config = {}
+        for key in cls.TRAINING_CONFIG_KEYS:
+            if key in config:
+                training_config[key] = config[key]
+
+        existing['training_config'] = training_config
+
+        cls.save_settings(existing, str(config_path))
+
+    @classmethod
+    def load_training_config(cls, project_path: Path) -> Dict[str, Any]:
+        """Load training configuration from project's config.yaml"""
+        config_path = project_path / 'config.yaml'
+        settings = cls.load_settings(str(config_path))
+        return settings.get('training_config', {})
 
     @classmethod
     def create_default_directories(cls):
