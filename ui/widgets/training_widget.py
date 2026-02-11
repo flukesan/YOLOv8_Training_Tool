@@ -460,6 +460,19 @@ class TrainingWidget(QWidget):
         banner.setLayout(banner_layout)
         layout.addWidget(banner)
 
+    def _set_config_enabled(self, enabled: bool):
+        """Enable/disable all configuration controls during training"""
+        controls = [
+            self.model_combo, self.imgsz_combo, self.epochs_spin,
+            self.batch_spin, self.batch_auto_btn, self.aug_combo,
+            self.optimizer_combo, self.lr_spin, self.patience_spin,
+            self.cos_lr_check, self.device_combo, self.workers_spin,
+            self.cache_combo, self.amp_check, self.multiscale_check,
+            self.freeze_spin, self.seed_spin,
+        ]
+        for ctrl in controls:
+            ctrl.setEnabled(enabled)
+
     def _on_start(self):
         """Handle start training - collect all config"""
         config = self.get_training_config()
@@ -467,6 +480,7 @@ class TrainingWidget(QWidget):
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
+        self._set_config_enabled(False)
         self._is_paused = False
         self.progress_bar.setFormat("Starting...")
         self.status_label.setText("Initializing training...")
@@ -608,6 +622,7 @@ class TrainingWidget(QWidget):
         self.btn_pause.setEnabled(False)
         self.btn_pause.setText("Pause")
         self.btn_stop.setEnabled(False)
+        self._set_config_enabled(True)
         self._is_paused = False
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("Complete")
@@ -621,6 +636,7 @@ class TrainingWidget(QWidget):
         self.btn_pause.setEnabled(False)
         self.btn_pause.setText("Pause")
         self.btn_stop.setEnabled(False)
+        self._set_config_enabled(True)
         self._is_paused = False
         self.progress_bar.setFormat("Failed")
         self.status_label.setText("Training failed - check logs")
