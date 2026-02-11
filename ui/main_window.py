@@ -5,15 +5,12 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QMenuBar, QFileDialog, QMessageBox, QSplitter,
                              QStatusBar, QLabel, QFrame, QTabWidget)
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
 from pathlib import Path
 
 from ui.widgets.image_viewer import ImageViewer
 from ui.widgets.label_widget import LabelWidget
 from ui.widgets.class_manager import ClassManagerWidget
 from ui.widgets.dataset_widget import DatasetWidget
-from ui.widgets.training_widget import TrainingWidget
-from ui.widgets.metrics_widget import MetricsWidget
 from ui.dialogs.new_project_dialog import NewProjectDialog
 from ui.dialogs.export_dialog import ExportDialog
 from ui.dialogs.split_dataset_dialog import SplitDatasetDialog
@@ -21,6 +18,7 @@ from ui.dialogs.training_results_dialog import TrainingResultsDialog
 from ui.dialogs.dataset_statistics_dialog import DatasetStatisticsDialog
 from ui.dialogs.model_testing_dialog import ModelTestingDialog
 from ui.dialogs.training_preflight_dialog import TrainingPreflightDialog
+from ui.dialogs.training_window import TrainingWindow
 
 from core.dataset_manager import DatasetManager
 from core.label_manager import LabelManager, BoundingBox, Polygon
@@ -176,40 +174,23 @@ class MainWindow(QMainWindow):
         ann_tab.setLayout(ann_layout)
         right_panel.addTab(ann_tab, "Annotations")
 
-        # Bottom panel: Training (tabs)
-        bottom_panel = QTabWidget()
+        # Training window (separate floating window)
+        self.training_window = TrainingWindow(self)
+        self.training_widget = self.training_window.training_widget
+        self.metrics_widget = self.training_window.metrics_widget
 
-        # Training config tab
-        train_tab = QWidget()
-        train_layout = QHBoxLayout()
-        train_layout.setSpacing(8)
-
-        self.training_widget = TrainingWidget()
         self.training_widget.start_training.connect(self.on_start_training)
         self.training_widget.stop_training.connect(self.on_stop_training)
         self.training_widget.pause_training.connect(self.on_pause_training)
-        train_layout.addWidget(self.training_widget, 1)
-
-        self.metrics_widget = MetricsWidget()
-        train_layout.addWidget(self.metrics_widget, 1)
-
-        train_tab.setLayout(train_layout)
-        bottom_panel.addTab(train_tab, "Training")
 
         # Connect training signals
         self.training_epoch_update.connect(self.update_training_metrics)
         self.training_started.connect(self.on_training_started)
         self.training_finished.connect(self.on_training_finished)
 
-        # Splitters
-        v_splitter = QSplitter(Qt.Orientation.Vertical)
-        v_splitter.addWidget(self.image_viewer)
-        v_splitter.addWidget(bottom_panel)
-        v_splitter.setStretchFactor(0, 3)
-        v_splitter.setStretchFactor(1, 1)
-
+        # Splitter: Image viewer (left) | Right panel (right)
         h_splitter = QSplitter(Qt.Orientation.Horizontal)
-        h_splitter.addWidget(v_splitter)
+        h_splitter.addWidget(self.image_viewer)
         h_splitter.addWidget(right_panel)
         h_splitter.setStretchFactor(0, 3)
         h_splitter.setStretchFactor(1, 1)
@@ -289,6 +270,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(sep3)
 
         self.step_train = WorkflowStep("4", "Train Model")
+        self.step_train.mousePressEvent = lambda e: self.open_training_window()
         layout.addWidget(self.step_train)
 
         sep4 = QLabel("-->")
@@ -364,6 +346,7 @@ class MainWindow(QMainWindow):
         dataset_menu.addAction("Statistics", self.show_statistics)
 
         training_menu = menubar.addMenu("Training")
+        training_menu.addAction("Open Training Panel", self.open_training_window)
         training_menu.addAction("Start Training", self.on_start_training)
         training_menu.addAction("View Results", self.view_training_results)
         training_menu.addSeparator()
@@ -658,6 +641,7 @@ class MainWindow(QMainWindow):
     def on_training_started(self):
         self.training_widget.set_status("Training...")
         self._update_status("Training in progress...")
+        self.open_training_window()
 
     def on_training_finished(self):
         if self.model_trainer and self.model_trainer.current_session:
@@ -887,6 +871,12 @@ class MainWindow(QMainWindow):
                         )
             except Exception as e:
                 print(f"Error loading classes from config: {e}")
+
+    def open_training_window(self):
+        """Open/show the Training Configuration & Metrics window"""
+        self.training_window.show()
+        self.training_window.raise_()
+        self.training_window.activateWindow()
 
     def show_about(self):
         QMessageBox.about(
