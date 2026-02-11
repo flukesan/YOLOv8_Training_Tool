@@ -1,5 +1,5 @@
 """
-Main Window - Application main interface
+Main Window - Application main interface with improved training workflow
 """
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QMenuBar, QFileDialog, QMessageBox, QSplitter,
@@ -19,6 +19,7 @@ from ui.dialogs.split_dataset_dialog import SplitDatasetDialog
 from ui.dialogs.training_results_dialog import TrainingResultsDialog
 from ui.dialogs.dataset_statistics_dialog import DatasetStatisticsDialog
 from ui.dialogs.model_testing_dialog import ModelTestingDialog
+from ui.dialogs.training_preflight_dialog import TrainingPreflightDialog
 
 from core.dataset_manager import DatasetManager
 from core.label_manager import LabelManager, BoundingBox, Polygon
@@ -100,6 +101,7 @@ class MainWindow(QMainWindow):
         self.training_widget = TrainingWidget()
         self.training_widget.start_training.connect(self.on_start_training)
         self.training_widget.stop_training.connect(self.on_stop_training)
+        self.training_widget.pause_training.connect(self.on_pause_training)
         bottom_layout.addWidget(self.training_widget)
 
         self.metrics_widget = MetricsWidget()
@@ -372,7 +374,7 @@ class MainWindow(QMainWindow):
                 self,
                 "No Images",
                 "No images found in the project.\n\n"
-                "Please import images first using File → Import Images"
+                "Please import images first using File > Import Images"
             )
             return
 
@@ -437,7 +439,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def on_start_training(self, config=None):
-        """Start training"""
+        """Start training with pre-flight validation"""
         if not self.model_trainer or not self.dataset_manager:
             QMessageBox.warning(self, "Warning", "Please create or open a project first")
             return
@@ -452,6 +454,13 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Run pre-flight check dialog
+        preflight = TrainingPreflightDialog(
+            self.project_path, self.classes, self.dataset_manager, self
+        )
+        if preflight.exec() != TrainingPreflightDialog.DialogCode.Accepted:
+            return
+
         # Create data.yaml
         try:
             data_yaml = self.dataset_manager.create_data_yaml(self.classes)
@@ -459,19 +468,32 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to create data.yaml:\n{str(e)}")
             return
 
+        # Get config from training widget if not provided via signal
+        if config is None or not isinstance(config, dict):
+            config = self.training_widget.get_training_config()
+
+        # Save training config to project for persistence
+        try:
+            Settings.save_training_config(config, self.project_path)
+        except Exception as e:
+            print(f"Warning: Could not save training config: {e}")
+
         # Register callbacks for training updates
         self.model_trainer.register_callback('on_train_start', self._on_train_start_callback)
         self.model_trainer.register_callback('on_epoch_end', self._on_epoch_end_callback)
         self.model_trainer.register_callback('on_train_end', self._on_train_end_callback)
         self.model_trainer.register_callback('on_train_error', self._on_train_error_callback)
 
+        # Reset metrics display
+        self.metrics_widget.reset()
+
         # Start training
         try:
             # Extract model from config if provided, otherwise use default
-            model_name = (config or {}).get('model', 'yolov8s.pt')
+            model_name = config.get('model', 'yolov8s.pt')
 
             # Remove 'model' from config as it's passed separately
-            train_config = {k: v for k, v in (config or {}).items() if k != 'model'}
+            train_config = {k: v for k, v in config.items() if k != 'model'}
 
             self.model_trainer.start_training(
                 train_config,
@@ -480,6 +502,7 @@ class MainWindow(QMainWindow):
             )
             self.status_bar.showMessage(f"Training started with {model_name}...")
         except Exception as e:
+            self.training_widget.training_failed()
             QMessageBox.critical(self, "Training Error", f"Failed to start training:\n{str(e)}")
 
     def _on_train_start_callback(self, session):
@@ -507,43 +530,107 @@ class MainWindow(QMainWindow):
 
     def on_training_finished(self):
         """Handle training finished (runs in main thread)"""
-        self.training_widget.training_finished()
-
         if self.model_trainer and self.model_trainer.current_session:
             status = self.model_trainer.current_session.status
 
             if status == 'completed':
+                self.training_widget.training_finished()
                 self.status_bar.showMessage("Training completed!")
-                QMessageBox.information(
-                    self,
-                    "Training Complete",
-                    "Model training completed successfully!\n\n"
-                    f"Best weights saved to:\n{self.model_trainer.get_best_weights_path()}"
-                )
+
+                best_path = self.model_trainer.get_best_weights_path()
+                best_metrics = self.model_trainer.current_session.best_metrics
+
+                # Build detailed completion message
+                msg = "Model training completed successfully!\n\n"
+                if best_path:
+                    msg += f"Best weights saved to:\n{best_path}\n\n"
+                if best_metrics:
+                    map50 = best_metrics.get('metrics/mAP50(B)', 0)
+                    map50_95 = best_metrics.get('metrics/mAP50-95(B)', 0)
+                    if map50 or map50_95:
+                        msg += f"Best mAP@50: {map50:.3f}\n"
+                        msg += f"Best mAP@50-95: {map50_95:.3f}\n\n"
+                msg += "Use Training > View Results to see detailed charts.\n"
+                msg += "Use Training > Test Model to test on new images."
+
+                QMessageBox.information(self, "Training Complete", msg)
+
             elif status == 'failed':
+                self.training_widget.training_failed()
                 self.status_bar.showMessage("Training failed")
                 QMessageBox.warning(
                     self,
                     "Training Failed",
-                    "Training failed. Check the console for error details."
+                    "Training failed. Check the console for error details.\n\n"
+                    "Common causes:\n"
+                    "- Not enough GPU memory (try smaller batch size or model)\n"
+                    "- Invalid annotations or empty dataset splits\n"
+                    "- Missing dependencies"
                 )
             else:
+                self.training_widget.training_finished()
                 self.status_bar.showMessage(f"Training {status}")
+        else:
+            self.training_widget.training_finished()
 
     def update_training_metrics(self, metrics):
         """Update training metrics display (runs in main thread)"""
         self.metrics_widget.update_metrics(metrics)
 
+        # Update training widget progress bar too
+        epoch = metrics.get('epoch', 0)
+        total_epochs = metrics.get('total_epochs', 0)
+        elapsed = metrics.get('elapsed_time', 0)
+
+        # Calculate ETA string
+        eta_str = ""
+        if epoch > 0 and total_epochs > 0:
+            avg_epoch_time = elapsed / epoch
+            remaining = avg_epoch_time * (total_epochs - epoch)
+            hours = int(remaining // 3600)
+            minutes = int((remaining % 3600) // 60)
+            secs = int(remaining % 60)
+            if hours > 0:
+                eta_str = f"{hours}h {minutes}m"
+            elif minutes > 0:
+                eta_str = f"{minutes}m {secs}s"
+            else:
+                eta_str = f"{secs}s"
+
+        self.training_widget.update_progress(epoch, total_epochs, eta_str)
+
         # Update status bar with current epoch
-        if 'epoch' in metrics and 'total_epochs' in metrics:
+        if epoch and total_epochs:
             self.status_bar.showMessage(
-                f"Training - Epoch {metrics['epoch']}/{metrics['total_epochs']}"
+                f"Training - Epoch {epoch}/{total_epochs}"
             )
 
     def on_stop_training(self):
         """Stop training"""
         if self.model_trainer:
-            self.model_trainer.stop_training()
+            reply = QMessageBox.question(
+                self,
+                "Stop Training",
+                "Are you sure you want to stop training?\n\n"
+                "The model weights from the last completed epoch will be saved.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.model_trainer.stop_training()
+                self.training_widget.set_status("Stopping...")
+                self.status_bar.showMessage("Stopping training...")
+
+    def on_pause_training(self):
+        """Pause or resume training"""
+        if self.model_trainer:
+            if self.model_trainer.current_session:
+                if self.model_trainer.current_session.status == 'paused':
+                    self.model_trainer.resume_training()
+                    self.status_bar.showMessage("Training resumed")
+                else:
+                    self.model_trainer.pause_training()
+                    self.status_bar.showMessage("Training paused")
 
     def view_training_results(self):
         """View training results"""
@@ -552,7 +639,7 @@ class MainWindow(QMainWindow):
                 self,
                 "No Project",
                 "Please create or open a project first.\n\n"
-                "Use File → New Project or File → Open Project"
+                "Use File > New Project or File > Open Project"
             )
             return
 
@@ -564,7 +651,7 @@ class MainWindow(QMainWindow):
                 self,
                 "No Training Results",
                 "No training results found.\n\n"
-                "Please complete model training first using Training → Start Training"
+                "Please complete model training first using Training > Start Training"
             )
             return
 
@@ -619,7 +706,7 @@ class MainWindow(QMainWindow):
                 self,
                 "No Project",
                 "Please create or open a project first.\n\n"
-                "Use File → New Project or File → Open Project"
+                "Use File > New Project or File > Open Project"
             )
             return
 
@@ -629,7 +716,7 @@ class MainWindow(QMainWindow):
                 self,
                 "No Training Session",
                 "No training session found.\n\n"
-                "Please train a model first using Training → Start Training"
+                "Please train a model first using Training > Start Training"
             )
             return
 
@@ -703,7 +790,7 @@ class MainWindow(QMainWindow):
                     for fmt, result in results.items():
                         if result.get('success'):
                             path = result.get('path', 'N/A')
-                            msg += f"✓ {fmt.upper()}: {path}\n"
+                            msg += f"  {fmt.upper()}: {path}\n"
 
                     QMessageBox.information(self, "Export Complete", msg)
                     self.status_bar.showMessage("Model export completed")
@@ -711,10 +798,10 @@ class MainWindow(QMainWindow):
                     msg = f"Export completed with {failed_count} error(s):\n\n"
                     for fmt, result in results.items():
                         if result.get('success'):
-                            msg += f"✓ {fmt.upper()}: {result.get('path', 'N/A')}\n"
+                            msg += f"  {fmt.upper()}: {result.get('path', 'N/A')}\n"
                         else:
                             error = result.get('error', 'Unknown error')
-                            msg += f"✗ {fmt.upper()}: {error}\n"
+                            msg += f"  {fmt.upper()}: FAILED - {error}\n"
 
                     QMessageBox.warning(self, "Export Completed with Errors", msg)
                     self.status_bar.showMessage("Model export completed with errors")
@@ -740,9 +827,25 @@ class MainWindow(QMainWindow):
         # Load classes from config.yaml if it exists
         self.load_classes_from_config()
 
+        # Load saved training config
+        self._load_saved_training_config()
+
         # Refresh dataset
         self.refresh_dataset()
         self.status_bar.showMessage(f"Loaded project: {self.project_path.name}")
+
+    def _load_saved_training_config(self):
+        """Load and apply previously saved training configuration"""
+        if not self.project_path:
+            return
+
+        try:
+            saved_config = Settings.load_training_config(self.project_path)
+            if saved_config:
+                self.training_widget.set_training_config(saved_config)
+                print(f"Loaded saved training config from project")
+        except Exception as e:
+            print(f"Could not load training config: {e}")
 
     def load_classes_from_config(self):
         """Load classes from project config.yaml"""
