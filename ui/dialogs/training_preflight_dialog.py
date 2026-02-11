@@ -1,11 +1,13 @@
 """
 Training Pre-flight Check Dialog - validates dataset readiness before training
+Automatically splits dataset if not already split.
 """
 from pathlib import Path
 from typing import List, Dict
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QGroupBox, QFrame, QScrollArea, QWidget)
 from PyQt6.QtCore import Qt
+from config.settings import Settings
 
 
 class CheckItem(QFrame):
@@ -39,6 +41,15 @@ class CheckItem(QFrame):
         self.icon_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
         self.text_label.setStyleSheet("color: #ddd;")
         self.detail_label.setText(detail)
+        self.detail_label.setStyleSheet("color: #aaa; font-size: 11px;")
+
+    def set_auto(self, detail: str = ""):
+        """Set auto-completed status (action was taken automatically)"""
+        self.icon_label.setText("[OK]")
+        self.icon_label.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 11px;")
+        self.text_label.setStyleSheet("color: #2196F3;")
+        self.detail_label.setText(detail)
+        self.detail_label.setStyleSheet("color: #2196F3; font-size: 11px;")
 
     def set_fail(self, detail: str = ""):
         self.icon_label.setText("[X]")
@@ -62,7 +73,8 @@ class CheckItem(QFrame):
 
 
 class TrainingPreflightDialog(QDialog):
-    """Dialog that validates dataset readiness before training starts"""
+    """Dialog that validates dataset readiness before training starts.
+    Automatically splits dataset if not already split."""
 
     def __init__(self, project_path: Path, classes: list,
                  dataset_manager=None, parent=None):
@@ -71,6 +83,7 @@ class TrainingPreflightDialog(QDialog):
         self.classes = classes
         self.dataset_manager = dataset_manager
         self.all_passed = False
+        self._auto_split_performed = False
 
         self.setWindowTitle("Pre-Training Checklist")
         self.setModal(True)
@@ -91,7 +104,7 @@ class TrainingPreflightDialog(QDialog):
 
         desc = QLabel(
             "Checking that your dataset and configuration are ready for training. "
-            "All required checks must pass before training can start."
+            "Dataset will be split automatically if needed."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #aaa; margin-bottom: 8px;")
@@ -132,6 +145,22 @@ class TrainingPreflightDialog(QDialog):
         checks_group.setLayout(checks_layout)
         layout.addWidget(checks_group)
 
+        # Auto-split info banner (hidden by default)
+        self.auto_split_banner = QFrame()
+        self.auto_split_banner.setStyleSheet(
+            "background-color: #1a2a3d; border: 1px solid #2196F3; "
+            "border-radius: 4px; padding: 4px;"
+        )
+        banner_layout = QHBoxLayout()
+        banner_layout.setContentsMargins(8, 4, 8, 4)
+        self.auto_split_label = QLabel("")
+        self.auto_split_label.setWordWrap(True)
+        self.auto_split_label.setStyleSheet("color: #2196F3; font-size: 11px;")
+        banner_layout.addWidget(self.auto_split_label)
+        self.auto_split_banner.setLayout(banner_layout)
+        self.auto_split_banner.setVisible(False)
+        layout.addWidget(self.auto_split_banner)
+
         # Summary
         self.summary_label = QLabel("")
         self.summary_label.setWordWrap(True)
@@ -161,8 +190,56 @@ class TrainingPreflightDialog(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
+    def _needs_auto_split(self) -> bool:
+        """Check if dataset needs to be auto-split"""
+        if not self.project_path:
+            return False
+
+        train_img_dir = self.project_path / 'train' / 'images'
+        val_img_dir = self.project_path / 'val' / 'images'
+
+        has_train = (train_img_dir.exists() and
+                     any(self._iter_images(train_img_dir)))
+        has_val = (val_img_dir.exists() and
+                   any(self._iter_images(val_img_dir)))
+
+        return not (has_train and has_val)
+
+    def _has_source_images(self) -> int:
+        """Check if source images directory has images"""
+        images_dir = self.project_path / 'images'
+        if not images_dir.exists():
+            return 0
+        return sum(1 for _ in self._iter_images(images_dir))
+
+    def _perform_auto_split(self) -> dict:
+        """Automatically split dataset with default ratios"""
+        if not self.dataset_manager:
+            return {}
+
+        try:
+            self.dataset_manager.refresh_images_list()
+            if not self.dataset_manager.images_list:
+                return {}
+
+            ratios = Settings.DATASET_SPLIT  # 70/20/10
+            stats = self.dataset_manager.split_dataset(ratios)
+            self._auto_split_performed = True
+            return stats
+        except Exception as e:
+            print(f"Auto-split failed: {e}")
+            return {}
+
+    @staticmethod
+    def _iter_images(directory: Path):
+        """Iterate over image files in a directory"""
+        exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff'}
+        for f in directory.iterdir():
+            if f.is_file() and f.suffix.lower() in exts:
+                yield f
+
     def run_checks(self):
-        """Run all validation checks"""
+        """Run all validation checks, auto-splitting if needed"""
         errors = 0
         warnings = 0
 
@@ -181,38 +258,46 @@ class TrainingPreflightDialog(QDialog):
             errors += 1
 
         # 3. Check images in project
-        images_dir = self.project_path / 'images' if self.project_path else None
-        if images_dir and images_dir.exists():
-            img_count = len([f for f in images_dir.iterdir()
-                           if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']])
-            if img_count > 0:
-                self.check_images.set_pass(f"{img_count} images")
-            else:
-                self.check_images.set_fail("No images found")
-                errors += 1
+        source_img_count = self._has_source_images()
+        if source_img_count > 0:
+            self.check_images.set_pass(f"{source_img_count} images")
         else:
-            self.check_images.set_fail("Images directory not found")
+            self.check_images.set_fail("No images found in project")
             errors += 1
 
-        # 4. Check dataset split
-        train_img_dir = self.project_path / 'train' / 'images' if self.project_path else None
-        val_img_dir = self.project_path / 'val' / 'images' if self.project_path else None
-
-        has_train = train_img_dir and train_img_dir.exists() and any(train_img_dir.iterdir())
-        has_val = val_img_dir and val_img_dir.exists() and any(val_img_dir.iterdir())
-
-        if has_train and has_val:
+        # 4. Auto-split if needed and possible
+        if self._needs_auto_split() and source_img_count > 0 and self.dataset_manager:
+            split_stats = self._perform_auto_split()
+            if split_stats:
+                train_n = split_stats.get('train', 0)
+                val_n = split_stats.get('val', 0)
+                test_n = split_stats.get('test', 0)
+                ratios = Settings.DATASET_SPLIT
+                self.check_split.set_auto(
+                    f"Auto-split: Train {train_n} / Val {val_n} / Test {test_n} "
+                    f"({int(ratios['train']*100)}/{int(ratios['val']*100)}/{int(ratios['test']*100)}%)"
+                )
+                # Show auto-split banner
+                self.auto_split_banner.setVisible(True)
+                self.auto_split_label.setText(
+                    f"Dataset was automatically split into "
+                    f"Train ({train_n}), Val ({val_n}), Test ({test_n}) "
+                    f"using default {int(ratios['train']*100)}/{int(ratios['val']*100)}/{int(ratios['test']*100)}% ratio. "
+                    f"You can customize this ratio via Dataset > Split Dataset."
+                )
+            else:
+                self.check_split.set_fail("Auto-split failed - try Dataset > Split Dataset manually")
+                errors += 1
+        elif not self._needs_auto_split():
             self.check_split.set_pass("Train and Val sets exist")
         else:
-            self.check_split.set_fail(
-                "Dataset not split. Use Dataset > Split Dataset first."
-            )
+            self.check_split.set_fail("No images to split")
             errors += 1
 
         # 5. Check training images count
-        if has_train:
-            train_count = len([f for f in train_img_dir.iterdir()
-                             if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']])
+        train_img_dir = self.project_path / 'train' / 'images' if self.project_path else None
+        if train_img_dir and train_img_dir.exists():
+            train_count = sum(1 for _ in self._iter_images(train_img_dir))
             if train_count >= 10:
                 self.check_train_images.set_pass(f"{train_count} images")
             elif train_count > 0:
@@ -228,9 +313,9 @@ class TrainingPreflightDialog(QDialog):
             errors += 1
 
         # 6. Check validation images count
-        if has_val:
-            val_count = len([f for f in val_img_dir.iterdir()
-                           if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']])
+        val_img_dir = self.project_path / 'val' / 'images' if self.project_path else None
+        if val_img_dir and val_img_dir.exists():
+            val_count = sum(1 for _ in self._iter_images(val_img_dir))
             if val_count >= 5:
                 self.check_val_images.set_pass(f"{val_count} images")
             elif val_count > 0:
@@ -252,13 +337,15 @@ class TrainingPreflightDialog(QDialog):
             if label_count > 0:
                 self.check_annotations.set_pass(f"{label_count} annotation files")
             else:
-                self.check_annotations.set_fail(
-                    "No annotation files found in train/labels"
+                self.check_annotations.set_warning(
+                    "No annotations yet - model will train without labels"
                 )
-                errors += 1
+                warnings += 1
         else:
-            self.check_annotations.set_fail("No train/labels directory")
-            errors += 1
+            self.check_annotations.set_warning(
+                "No annotations yet - model will train without labels"
+            )
+            warnings += 1
 
         # 8. Check data.yaml
         config_yaml = self.project_path / 'config.yaml' if self.project_path else None
@@ -288,7 +375,16 @@ class TrainingPreflightDialog(QDialog):
         if errors == 0:
             self.all_passed = True
             self.btn_start.setEnabled(True)
-            if warnings > 0:
+            if self._auto_split_performed:
+                self.summary_label.setText(
+                    "Dataset was automatically prepared! "
+                    "All checks passed. Ready to start training."
+                )
+                self.summary_label.setStyleSheet(
+                    "color: #2196F3; font-size: 12px; padding: 8px; "
+                    "background-color: #1a2a3d; border-radius: 4px;"
+                )
+            elif warnings > 0:
                 self.summary_label.setText(
                     f"All required checks passed with {warnings} warning(s). "
                     "You can start training."
