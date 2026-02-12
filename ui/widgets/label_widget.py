@@ -1,9 +1,10 @@
 """
 Label Widget - annotation tools panel with modern UI
 """
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QListWidget, QPushButton,
-                             QLabel, QHBoxLayout)
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QListWidget, QListWidgetItem,
+                             QPushButton, QLabel, QHBoxLayout)
 from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QColor, QBrush, QIcon, QPixmap, QPainter
 
 
 class LabelWidget(QWidget):
@@ -15,6 +16,8 @@ class LabelWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.annotations = []
+        self.class_names = []
+        self.class_colors = {}
         self.init_ui()
 
     def init_ui(self):
@@ -36,7 +39,12 @@ class LabelWidget(QWidget):
 
         # Annotation list
         self.annotation_list = QListWidget()
-        self.annotation_list.itemClicked.connect(self._on_annotation_selected)
+        self.annotation_list.setStyleSheet(
+            "QListWidget::item { padding: 4px 6px; border-bottom: 1px solid #2d313a; }"
+            "QListWidget::item:selected { background-color: #2d7d46; color: #ffffff; }"
+            "QListWidget::item:hover { background-color: #2a2e38; }"
+        )
+        self.annotation_list.currentRowChanged.connect(self._on_annotation_selected)
         layout.addWidget(self.annotation_list)
 
         # Buttons
@@ -56,33 +64,71 @@ class LabelWidget(QWidget):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
+    def set_classes(self, class_names, class_colors):
+        """Set class info for display"""
+        self.class_names = class_names
+        self.class_colors = class_colors
+
+    def _make_color_icon(self, color_tuple, size=14):
+        """Create a small colored square icon"""
+        pm = QPixmap(size, size)
+        pm.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QBrush(QColor(*color_tuple)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(0, 0, size, size, 3, 3)
+        painter.end()
+        return QIcon(pm)
+
     def update_annotations(self, annotations):
-        """Update annotation list"""
+        """Update annotation list with class names and color indicators"""
         self.annotations = annotations
+        self.annotation_list.blockSignals(True)
         self.annotation_list.clear()
 
         for i, ann in enumerate(annotations):
+            class_id = ann.class_id if hasattr(ann, 'class_id') else 0
+            color = self.class_colors.get(class_id, (255, 255, 255))
+
+            # Determine class name
+            if class_id < len(self.class_names):
+                class_name = self.class_names[class_id]
+            else:
+                class_name = f"Class {class_id}"
+
+            # Determine annotation type
+            ann_type = "Annotation"
+            extra = ""
             if hasattr(ann, 'annotation_type'):
                 if ann.annotation_type == 'box':
-                    self.annotation_list.addItem(
-                        f"  [{i+1}]  Box - Class {ann.class_id}"
-                    )
+                    ann_type = "Box"
                 elif ann.annotation_type == 'polygon':
-                    num_points = len(ann.points) if hasattr(ann, 'points') else 0
-                    self.annotation_list.addItem(
-                        f"  [{i+1}]  Polygon - Class {ann.class_id} ({num_points} pts)"
-                    )
-            else:
-                self.annotation_list.addItem(
-                    f"  [{i+1}]  Annotation - Class {ann.class_id}"
-                )
+                    ann_type = "Polygon"
+                    num_pts = len(ann.points) if hasattr(ann, 'points') else 0
+                    extra = f" ({num_pts} pts)"
 
+            text = f"  [{i+1}]  {ann_type} - {class_name}{extra}"
+            item = QListWidgetItem(text)
+            item.setIcon(self._make_color_icon(color))
+            self.annotation_list.addItem(item)
+
+        self.annotation_list.blockSignals(False)
         self.count_label.setText(f"{len(annotations)} annotations")
 
-    def _on_annotation_selected(self, item):
-        """Handle annotation selection"""
-        index = self.annotation_list.row(item)
-        self.annotation_selected.emit(index)
+    def select_annotation(self, index: int):
+        """Programmatically select/highlight an annotation row"""
+        self.annotation_list.blockSignals(True)
+        if 0 <= index < self.annotation_list.count():
+            self.annotation_list.setCurrentRow(index)
+        else:
+            self.annotation_list.setCurrentRow(-1)
+        self.annotation_list.blockSignals(False)
+
+    def _on_annotation_selected(self, row):
+        """Handle annotation selection from list"""
+        if row >= 0:
+            self.annotation_selected.emit(row)
 
     def _on_delete(self):
         """Handle delete button"""
