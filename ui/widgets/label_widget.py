@@ -12,6 +12,7 @@ class LabelWidget(QWidget):
 
     delete_annotation = pyqtSignal(int)
     annotation_selected = pyqtSignal(int)
+    paste_from_previous = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -46,6 +47,19 @@ class LabelWidget(QWidget):
         )
         self.annotation_list.currentRowChanged.connect(self._on_annotation_selected)
         layout.addWidget(self.annotation_list)
+
+        # Paste from previous button
+        self.btn_paste_prev = QPushButton("Paste from previous image")
+        self.btn_paste_prev.setStyleSheet(
+            "QPushButton { background-color: #2d6a4f; color: #ffffff; "
+            "border: none; border-radius: 6px; padding: 5px 10px; "
+            "font-size: 11px; }"
+            "QPushButton:hover { background-color: #40916c; }"
+            "QPushButton:disabled { background-color: #3a3f4a; color: #6c7280; }"
+        )
+        self.btn_paste_prev.setEnabled(False)
+        self.btn_paste_prev.clicked.connect(lambda: self.paste_from_previous.emit())
+        layout.addWidget(self.btn_paste_prev)
 
         # Buttons
         btn_layout = QHBoxLayout()

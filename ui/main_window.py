@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self.label_manager = None
         self.model_trainer = None
         self.current_image = None
+        self.previous_image = None
         self.classes = []
 
         self.init_ui()
@@ -172,6 +173,7 @@ class MainWindow(QMainWindow):
         self.label_widget = LabelWidget()
         self.label_widget.delete_annotation.connect(self.on_delete_annotation)
         self.label_widget.annotation_selected.connect(self.on_annotation_selected_from_list)
+        self.label_widget.paste_from_previous.connect(self.on_paste_from_previous)
         ann_layout.addWidget(self.label_widget)
 
         ann_tab.setLayout(ann_layout)
@@ -423,8 +425,13 @@ class MainWindow(QMainWindow):
 
     def load_image(self, image_path: str):
         """Load image in viewer"""
+        if self.current_image:
+            self.previous_image = self.current_image
         self.current_image = Path(image_path)
         self.image_viewer.load_image(self.current_image)
+
+        # Enable/disable paste button
+        self.label_widget.btn_paste_prev.setEnabled(self.previous_image is not None)
 
         if self.label_manager:
             label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
@@ -509,6 +516,28 @@ class MainWindow(QMainWindow):
         self.image_viewer.set_annotations(annotations)
         self.label_widget.update_annotations(annotations)
         self.dataset_widget.update_annotation_summary(annotations)
+
+    def on_paste_from_previous(self):
+        """Paste annotations from the previous image to the current image"""
+        if not self.label_manager or not self.current_image or not self.previous_image:
+            return
+        prev_label_path = self.previous_image.parent.parent / 'labels' / f"{self.previous_image.stem}.txt"
+        prev_annotations = self.label_manager.load_annotations(prev_label_path)
+        if not prev_annotations:
+            self._update_status("No annotations in previous image")
+            return
+
+        # Append previous annotations to current label file
+        cur_label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
+        cur_annotations = self.label_manager.load_annotations(cur_label_path)
+        cur_annotations.extend(prev_annotations)
+        self.label_manager.save_annotations(cur_label_path, cur_annotations)
+
+        # Reload display
+        self.image_viewer.set_annotations(cur_annotations)
+        self.label_widget.update_annotations(cur_annotations)
+        self.dataset_widget.update_annotation_summary(cur_annotations)
+        self._update_status(f"Pasted {len(prev_annotations)} annotations from previous image")
 
     def on_annotation_selected_from_viewer(self, index):
         """Handle annotation selected in ImageViewer → highlight in LabelWidget"""
