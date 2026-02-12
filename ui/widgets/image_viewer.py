@@ -169,6 +169,9 @@ class ImageViewer(QWidget):
     def set_annotations(self, annotations: List):
         """Set annotations"""
         self.annotations = annotations
+        if self.selected_annotation >= len(self.annotations):
+            self.selected_annotation = -1
+            self._edit_action = None
         self.update_display()
 
     def set_classes(self, class_names: List[str], class_colors: dict):
@@ -425,7 +428,7 @@ class ImageViewer(QWidget):
 
         if event.button() == Qt.MouseButton.LeftButton:
             # --- Check if clicking on a resize handle of the selected box ---
-            if self.selected_annotation >= 0:
+            if 0 <= self.selected_annotation < len(self.annotations):
                 ann = self.annotations[self.selected_annotation]
                 box = self._get_box_abs(ann)
                 if box:
