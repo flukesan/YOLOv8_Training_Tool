@@ -431,6 +431,9 @@ class MainWindow(QMainWindow):
             annotations = self.label_manager.load_annotations(label_path)
             self.image_viewer.set_annotations(annotations)
             self.label_widget.update_annotations(annotations)
+            self.dataset_widget.update_annotation_summary(annotations)
+        else:
+            self.dataset_widget.update_annotation_summary([])
 
     def on_images_deleted(self, image_paths):
         """Handle deletion of images"""
@@ -479,6 +482,7 @@ class MainWindow(QMainWindow):
         annotations = self.label_manager.load_annotations(label_path)
         self.image_viewer.set_annotations(annotations)
         self.label_widget.update_annotations(annotations)
+        self.dataset_widget.update_annotation_summary(annotations)
         self._update_workflow_steps()
 
     def on_polygon_added(self, points, class_id):
@@ -492,6 +496,7 @@ class MainWindow(QMainWindow):
         annotations = self.label_manager.load_annotations(label_path)
         self.image_viewer.set_annotations(annotations)
         self.label_widget.update_annotations(annotations)
+        self.dataset_widget.update_annotation_summary(annotations)
         self._update_workflow_steps()
 
     def on_delete_annotation(self, index):
@@ -503,6 +508,7 @@ class MainWindow(QMainWindow):
         annotations = self.label_manager.load_annotations(label_path)
         self.image_viewer.set_annotations(annotations)
         self.label_widget.update_annotations(annotations)
+        self.dataset_widget.update_annotation_summary(annotations)
 
     def on_annotation_selected_from_viewer(self, index):
         """Handle annotation selected in ImageViewer → highlight in LabelWidget"""
@@ -519,6 +525,7 @@ class MainWindow(QMainWindow):
         label_path = self.current_image.parent.parent / 'labels' / f"{self.current_image.stem}.txt"
         self.label_manager.save_annotations(label_path, self.image_viewer.annotations)
         self.label_widget.update_annotations(self.image_viewer.annotations)
+        self.dataset_widget.update_annotation_summary(self.image_viewer.annotations)
         self.label_widget.select_annotation(index)
 
     def on_class_added(self, class_name):
@@ -529,6 +536,7 @@ class MainWindow(QMainWindow):
             self.label_manager.set_classes(self.classes)
             self.image_viewer.set_classes(self.classes, self.label_manager.class_colors)
             self.label_widget.set_classes(self.classes, self.label_manager.class_colors)
+            self.dataset_widget.set_classes(self.classes, self.label_manager.class_colors)
         self.save_classes_to_config()
 
     def on_class_deleted(self, index):
@@ -891,6 +899,9 @@ class MainWindow(QMainWindow):
                             self.classes, self.label_manager.class_colors
                         )
                         self.label_widget.set_classes(
+                            self.classes, self.label_manager.class_colors
+                        )
+                        self.dataset_widget.set_classes(
                             self.classes, self.label_manager.class_colors
                         )
             except Exception as e:
