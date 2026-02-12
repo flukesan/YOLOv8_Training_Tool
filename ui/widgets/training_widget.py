@@ -72,7 +72,7 @@ class TrainingWidget(QWidget):
                 info['has_cuda'] = True
                 info['cuda_count'] = torch.cuda.device_count()
                 info['cuda_name'] = torch.cuda.get_device_name(0)
-                mem_gb = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+                mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 info['cuda_memory'] = f"{mem_gb:.1f} GB"
                 info['recommended'] = '0'
         except ImportError:
