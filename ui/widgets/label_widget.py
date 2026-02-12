@@ -37,6 +37,16 @@ class LabelWidget(QWidget):
         title_row.addWidget(self.count_label)
         layout.addLayout(title_row)
 
+        # Class summary (annotation counts per class)
+        self.class_summary = QLabel("")
+        self.class_summary.setWordWrap(True)
+        self.class_summary.setStyleSheet(
+            "background-color: #1e2229; border-radius: 6px; padding: 6px 8px; "
+            "font-size: 12px; color: #c8cdd3;"
+        )
+        self.class_summary.setVisible(False)
+        layout.addWidget(self.class_summary)
+
         # Annotation list
         self.annotation_list = QListWidget()
         self.annotation_list.setStyleSheet(
@@ -115,6 +125,40 @@ class LabelWidget(QWidget):
 
         self.annotation_list.blockSignals(False)
         self.count_label.setText(f"{len(annotations)} annotations")
+        self._update_class_summary(annotations)
+
+    def _update_class_summary(self, annotations):
+        """Update class summary showing annotation count per class"""
+        if not annotations:
+            self.class_summary.setVisible(False)
+            return
+
+        # Count annotations per class
+        class_counts = {}
+        for ann in annotations:
+            class_id = ann.class_id if hasattr(ann, 'class_id') else 0
+            class_counts[class_id] = class_counts.get(class_id, 0) + 1
+
+        # Build HTML summary
+        lines = []
+        for class_id in sorted(class_counts.keys()):
+            count = class_counts[class_id]
+            color = self.class_colors.get(class_id, (255, 255, 255))
+            hex_color = '#{:02x}{:02x}{:02x}'.format(*color)
+            if class_id < len(self.class_names):
+                name = self.class_names[class_id]
+            else:
+                name = f"Class {class_id}"
+            lines.append(
+                f'<span style="color:{hex_color};">&#9632;</span> '
+                f'{name}: <b>{count}</b>'
+            )
+
+        total_classes = len(class_counts)
+        header = f'<b>{total_classes} classes</b> &nbsp;|&nbsp; <b>{len(annotations)} total</b>'
+        html = header + '<br>' + ' &nbsp;&nbsp; '.join(lines)
+        self.class_summary.setText(html)
+        self.class_summary.setVisible(True)
 
     def select_annotation(self, index: int):
         """Programmatically select/highlight an annotation row"""
