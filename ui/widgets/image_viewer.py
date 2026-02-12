@@ -4,7 +4,7 @@ Supports selecting, moving, and resizing existing annotations.
 """
 from PyQt6.QtWidgets import (QWidget, QLabel, QVBoxLayout, QHBoxLayout, QScrollArea,
                              QPushButton, QSlider, QButtonGroup, QRadioButton, QGroupBox)
-from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, pyqtSignal, QRectF
+from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, pyqtSignal, QRectF, QEvent
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QPolygonF, QWheelEvent
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -80,10 +80,23 @@ class ImageViewer(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.image_label)
         self.scroll.setWidgetResizable(True)
+        self.scroll.setMouseTracking(True)
+        self.scroll.viewport().setMouseTracking(True)
+
+        # Forward mouse events from image_label to ImageViewer
+        self.image_label.installEventFilter(self)
 
         main_layout.addWidget(self.scroll)
 
+        self.setMouseTracking(True)
         self.setLayout(main_layout)
+
+    def eventFilter(self, obj, event):
+        """Forward mouse events from image_label so drawing preview works without button held"""
+        if obj is self.image_label and event.type() == QEvent.Type.MouseMove:
+            self.mouseMoveEvent(event)
+            return True
+        return super().eventFilter(obj, event)
 
     def create_toolbar(self):
         """Create toolbar with annotation mode and zoom controls"""
@@ -325,10 +338,25 @@ class ImageViewer(QWidget):
 
         # Draw current drawing
         if self.annotation_mode == "box" and self.current_rect:
+            # Semi-transparent fill
+            fill = QColor(0, 255, 0, 30)
+            painter.setBrush(QBrush(fill))
             pen = QPen(QColor(0, 255, 0))
             pen.setWidth(2)
+            pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(self.current_rect)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            # Draw size label
+            rw = self.current_rect.width()
+            rh = self.current_rect.height()
+            size_text = f"{rw} x {rh}"
+            font = painter.font()
+            font.setPixelSize(12)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor(0, 255, 0)))
+            painter.drawText(self.current_rect.x(), self.current_rect.bottom() + 14, size_text)
 
         elif self.annotation_mode == "polygon" and len(self.current_polygon_points) > 0:
             pen = QPen(QColor(0, 255, 0))
@@ -611,6 +639,7 @@ class ImageViewer(QWidget):
             self.start_point = img_pos
             self.drawing = True
             self.current_rect = None
+            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
 
         elif self.annotation_mode == "polygon":
             self.current_polygon_points.append(img_pos)
@@ -631,6 +660,7 @@ class ImageViewer(QWidget):
                 self.start_point = None
                 self.current_rect = None
                 self.current_polygon_points = []
+                self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
                 self.update_display()
             elif self.selected_annotation >= 0:
                 self.selected_annotation = -1
@@ -671,6 +701,7 @@ class ImageViewer(QWidget):
         self.drawing = False
         self.start_point = None
         self.current_rect = None
+        self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
         self.update_display()
 
     def finish_polygon(self):
