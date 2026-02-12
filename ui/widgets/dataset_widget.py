@@ -16,6 +16,8 @@ class DatasetWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.images = []
+        self.class_names = []
+        self.class_colors = {}
         self.init_ui()
 
     def init_ui(self):
@@ -40,6 +42,16 @@ class DatasetWidget(QWidget):
         self.image_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.image_list.itemClicked.connect(self._on_image_selected)
         layout.addWidget(self.image_list)
+
+        # Annotation summary for current image
+        self.annotation_summary = QLabel("")
+        self.annotation_summary.setWordWrap(True)
+        self.annotation_summary.setStyleSheet(
+            "background-color: #1e2229; border-radius: 6px; padding: 8px 10px; "
+            "font-size: 12px; color: #c8cdd3;"
+        )
+        self.annotation_summary.setVisible(False)
+        layout.addWidget(self.annotation_summary)
 
         # Navigation buttons
         nav_layout = QHBoxLayout()
@@ -84,6 +96,50 @@ class DatasetWidget(QWidget):
         self.delete_shortcut.activated.connect(self._on_delete)
 
         self.setLayout(layout)
+
+    def set_classes(self, class_names, class_colors):
+        """Set class info for annotation summary display"""
+        self.class_names = class_names
+        self.class_colors = class_colors
+
+    def update_annotation_summary(self, annotations):
+        """Update annotation summary showing counts per class for current image"""
+        if not annotations:
+            self.annotation_summary.setText(
+                '<span style="color:#8891a0;">No annotations</span>'
+            )
+            self.annotation_summary.setVisible(True)
+            return
+
+        # Count annotations per class
+        class_counts = {}
+        for ann in annotations:
+            class_id = ann.class_id if hasattr(ann, 'class_id') else 0
+            class_counts[class_id] = class_counts.get(class_id, 0) + 1
+
+        # Build HTML summary
+        total_classes = len(class_counts)
+        header = (f'<b style="color:#ffffff;">{total_classes} class{"es" if total_classes != 1 else ""}</b>'
+                  f' &nbsp;|&nbsp; '
+                  f'<b style="color:#ffffff;">{len(annotations)} annotation{"s" if len(annotations) != 1 else ""}</b>')
+
+        lines = []
+        for class_id in sorted(class_counts.keys()):
+            count = class_counts[class_id]
+            color = self.class_colors.get(class_id, (255, 255, 255))
+            hex_color = '#{:02x}{:02x}{:02x}'.format(*color)
+            if class_id < len(self.class_names):
+                name = self.class_names[class_id]
+            else:
+                name = f"Class {class_id}"
+            lines.append(
+                f'<span style="color:{hex_color};">&#9632;</span> '
+                f'{name}: <b>{count}</b>'
+            )
+
+        html = header + '<br>' + '<br>'.join(lines)
+        self.annotation_summary.setText(html)
+        self.annotation_summary.setVisible(True)
 
     def set_images(self, images):
         """Set image list"""
