@@ -362,7 +362,7 @@ class TrainingPreflightDialog(QDialog):
             import torch
             if torch.cuda.is_available():
                 gpu_name = torch.cuda.get_device_name(0)
-                mem = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+                mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 self.check_gpu.set_pass(f"{gpu_name} ({mem:.1f} GB)")
             else:
                 self.check_gpu.set_warning("No GPU - will use CPU (slow)")
