@@ -193,18 +193,71 @@ class ModelTrainer:
 
         return train_config
 
+    def _preflight_checks(self, config: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Pre-flight checks before training to catch issues early
+        Returns:
+            Tuple of (is_ok, error_message)
+        """
+        import shutil
+
+        # Check disk space (need at least 2GB free for training)
+        project_dir = Path(config.get('project', self.project_path / 'runs' / 'train'))
+        check_dir = project_dir.parent if project_dir.parent.exists() else Path.home()
+        try:
+            stat = shutil.disk_usage(check_dir)
+            free_gb = stat.free / (1024**3)
+            if free_gb < 2:
+                return False, f"Insufficient disk space: {free_gb:.1f}GB free, need at least 2GB"
+        except Exception as e:
+            print(f"Warning: Could not check disk space: {e}")
+
+        # Check CUDA availability if GPU device specified
+        device = str(config.get('device', '')).lower()
+        if device and device not in ('', 'cpu'):
+            try:
+                import torch
+                if not torch.cuda.is_available():
+                    return False, "GPU device specified but CUDA is not available. Use 'cpu' or install CUDA."
+
+                # Warn if batch size might be too large
+                if torch.cuda.is_available():
+                    gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    batch = config.get('batch', 16)
+                    imgsz = config.get('imgsz', 640)
+
+                    # Rough estimate of GPU memory needed (heuristic)
+                    estimated_gb = (batch * (imgsz / 640) ** 2) * 0.3
+                    if estimated_gb > gpu_mem_gb * 0.85 and batch > 0:
+                        print(f"Warning: Batch size {batch} at {imgsz}px may exceed GPU memory "
+                              f"({gpu_mem_gb:.1f}GB). Consider reducing batch size.")
+            except ImportError:
+                print("Warning: torch not available for GPU checks")
+            except Exception as e:
+                print(f"Warning: Could not check GPU: {e}")
+
+        return True, None
+
     def _train_worker(self, config: Dict[str, Any]):
         """Worker function for training"""
         try:
             from ultralytics import YOLO
+
+            # Run pre-flight checks
+            ok, error_msg = self._preflight_checks(config)
+            if not ok:
+                raise RuntimeError(f"Pre-flight check failed: {error_msg}")
 
             self.current_session.status = 'running'
             self.current_session.start_time = time.time()
 
             self._trigger_callbacks('on_train_start', self.current_session)
 
+            # Separate model path from config (it's not a train() parameter)
+            train_kwargs = config.copy()
+            model_path = train_kwargs.pop('model', 'yolov8n.pt')
+
             # Load model
-            model = YOLO(config['model'])
+            model = YOLO(model_path)
 
             # Add custom callbacks to YOLO trainer
             def on_train_epoch_end(trainer):
@@ -246,9 +299,9 @@ class ModelTrainer:
             # Register callback with YOLO model
             model.add_callback('on_train_epoch_end', on_train_epoch_end)
 
-            # Train model
+            # Train model (use train_kwargs which has 'model' removed)
             results = model.train(
-                **config,
+                **train_kwargs,
                 verbose=True,
                 plots=True,
             )

@@ -10,18 +10,41 @@ from collections import defaultdict
 class ModelEvaluator:
     """Evaluates trained YOLO models"""
 
-    def __init__(self, model_path: Path):
+    def __init__(self, model_path: Path, project_path: Optional[Path] = None):
         self.model_path = Path(model_path)
+        # Use project path or fall back to model's parent directory
+        self.project_path = Path(project_path) if project_path else self.model_path.parent
         self.model = None
         self._load_model()
 
     def _load_model(self):
-        """Load the YOLO model"""
+        """Load the YOLO model with comprehensive validation"""
         try:
+            # Validate file exists
+            if not self.model_path.exists():
+                print(f"Error: Model file not found: {self.model_path}")
+                self.model = None
+                return
+
+            # Validate file is not empty
+            if self.model_path.stat().st_size == 0:
+                print(f"Error: Model file is empty: {self.model_path}")
+                self.model = None
+                return
+
+            # Validate file size is reasonable
+            if self.model_path.stat().st_size < 1024:
+                print(f"Error: Model file too small (likely corrupted): {self.model_path}")
+                self.model = None
+                return
+
             from ultralytics import YOLO
             self.model = YOLO(str(self.model_path))
+
         except Exception as e:
-            print(f"Error loading model: {e}")
+            print(f"Error loading model from {self.model_path}: {e}")
+            import traceback
+            traceback.print_exc()
             self.model = None
 
     def predict_image(self, image_path: Path, conf_threshold: float = 0.25,
@@ -346,7 +369,7 @@ class ModelEvaluator:
         """
         from core.label_manager import LabelManager
 
-        label_manager = LabelManager(Path('.'))
+        label_manager = LabelManager(self.project_path)
         gt_boxes = label_manager.load_annotations(ground_truth_path)
 
         true_positives = 0
