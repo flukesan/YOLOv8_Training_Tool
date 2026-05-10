@@ -6,6 +6,9 @@ from typing import Dict, Any, Optional, Callable, Tuple
 import threading
 import time
 from config.settings import Settings
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class TrainingSession:
@@ -78,7 +81,7 @@ class ModelTrainer:
             try:
                 callback(*args, **kwargs)
             except Exception as e:
-                print(f"Error in callback for {event}: {e}")
+                logger.error(f"Error in callback for {event}: {e}", exc_info=True)
 
     def start_training(self, config: Dict[str, Any],
                       data_yaml_path: Path,
@@ -209,7 +212,7 @@ class ModelTrainer:
             if free_gb < 2:
                 return False, f"Insufficient disk space: {free_gb:.1f}GB free, need at least 2GB"
         except Exception as e:
-            print(f"Warning: Could not check disk space: {e}")
+            logger.warning(f"Could not check disk space: {e}")
 
         # Check CUDA availability if GPU device specified
         device = str(config.get('device', '')).lower()
@@ -228,12 +231,12 @@ class ModelTrainer:
                     # Rough estimate of GPU memory needed (heuristic)
                     estimated_gb = (batch * (imgsz / 640) ** 2) * 0.3
                     if estimated_gb > gpu_mem_gb * 0.85 and batch > 0:
-                        print(f"Warning: Batch size {batch} at {imgsz}px may exceed GPU memory "
-                              f"({gpu_mem_gb:.1f}GB). Consider reducing batch size.")
+                        logger.warning(f"Batch size {batch} at {imgsz}px may exceed GPU memory "
+                                      f"({gpu_mem_gb:.1f}GB). Consider reducing batch size.")
             except ImportError:
-                print("Warning: torch not available for GPU checks")
+                logger.warning("torch not available for GPU checks")
             except Exception as e:
-                print(f"Warning: Could not check GPU: {e}")
+                logger.warning(f"Could not check GPU: {e}")
 
         return True, None
 
@@ -320,9 +323,7 @@ class ModelTrainer:
             self.current_session.status = 'failed'
             self.current_session.end_time = time.time()
             error_msg = f"Training failed: {e}"
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
+            logger.error(error_msg, exc_info=True)
             self._trigger_callbacks('on_train_error', error_msg)
 
     def pause_training(self):
@@ -415,7 +416,7 @@ class ModelTrainer:
             return metrics
 
         except Exception as e:
-            print(f"Validation failed: {e}")
+            logger.error(f"Validation failed: {e}", exc_info=True)
             return {}
 
     def get_training_history(self) -> Dict[str, list]:
