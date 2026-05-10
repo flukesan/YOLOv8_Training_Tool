@@ -45,12 +45,19 @@ class DatasetManager:
                     stats['skipped'] += 1
 
             elif source_path.is_dir():
-                for img_file in source_path.rglob('*'):
-                    if img_file.is_file() and self._is_image_file(img_file):
-                        if self._import_single_image(img_file, images_dir, copy):
-                            stats['imported'] += 1
-                        else:
-                            stats['errors'] += 1
+                # Use specific patterns for better performance
+                # Avoids scanning every file, including non-image files
+                seen_files = set()
+                for ext in Settings.IMAGE_FORMATS:
+                    # Match both lowercase and uppercase extensions
+                    for pattern in [f'*{ext}', f'*{ext.upper()}']:
+                        for img_file in source_path.rglob(pattern):
+                            if img_file.is_file() and img_file not in seen_files:
+                                seen_files.add(img_file)
+                                if self._import_single_image(img_file, images_dir, copy):
+                                    stats['imported'] += 1
+                                else:
+                                    stats['errors'] += 1
 
         self.refresh_images_list()
         return stats

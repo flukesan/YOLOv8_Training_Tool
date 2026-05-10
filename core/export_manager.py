@@ -15,12 +15,33 @@ class ExportManager:
         self._load_model()
 
     def _load_model(self):
-        """Load the YOLO model"""
+        """Load the YOLO model with comprehensive validation"""
         try:
+            # Validate file exists
+            if not self.model_path.exists():
+                print(f"Error: Model file not found: {self.model_path}")
+                self.model = None
+                return
+
+            # Validate file is not empty
+            if self.model_path.stat().st_size == 0:
+                print(f"Error: Model file is empty: {self.model_path}")
+                self.model = None
+                return
+
+            # Validate file size is reasonable (at least 1KB for any valid model)
+            if self.model_path.stat().st_size < 1024:
+                print(f"Error: Model file too small (likely corrupted): {self.model_path}")
+                self.model = None
+                return
+
             from ultralytics import YOLO
             self.model = YOLO(str(self.model_path))
+
         except Exception as e:
-            print(f"Error loading model: {e}")
+            print(f"Error loading model from {self.model_path}: {e}")
+            import traceback
+            traceback.print_exc()
             self.model = None
 
     def export(self, format: str, **kwargs) -> Optional[Path]:
@@ -183,6 +204,8 @@ class ExportManager:
         Returns:
             Dictionary mapping format to exported path
         """
+        import shutil
+
         results = {}
 
         for fmt in formats:
@@ -196,7 +219,14 @@ class ExportManager:
                     output_dir.mkdir(parents=True, exist_ok=True)
 
                     new_path = output_dir / exported_path.name
-                    exported_path.rename(new_path)
+
+                    # Handle cross-filesystem moves (rename fails across drives)
+                    try:
+                        exported_path.rename(new_path)
+                    except OSError:
+                        # Cross-filesystem move - use shutil.move
+                        shutil.move(str(exported_path), str(new_path))
+
                     results[fmt] = new_path
 
         return results
@@ -268,13 +298,28 @@ class ExportManager:
         Returns:
             Dictionary mapping format to size in MB
         """
+        import tempfile
+        import shutil
+
         sizes = {}
 
-        temp_exports = self.export_multiple(formats)
+        # Create temp directory for exports
+        temp_dir = Path(tempfile.mkdtemp(prefix="yolo_size_compare_"))
 
-        for fmt, path in temp_exports.items():
-            if path and path.exists():
-                sizes[fmt] = path.stat().st_size / (1024 * 1024)
+        try:
+            temp_exports = self.export_multiple(formats, output_dir=temp_dir)
+
+            for fmt, path in temp_exports.items():
+                if path and path.exists():
+                    sizes[fmt] = path.stat().st_size / (1024 * 1024)
+
+        finally:
+            # Always clean up temp directory
+            try:
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception as e:
+                print(f"Warning: Could not clean up temp directory: {e}")
 
         return sizes
 
