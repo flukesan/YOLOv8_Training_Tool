@@ -1,13 +1,21 @@
 """
 Image Viewer Widget - displays images with bounding boxes and polygons
+Supports selecting, moving, and resizing existing annotations.
 """
 from PyQt6.QtWidgets import (QWidget, QLabel, QVBoxLayout, QHBoxLayout, QScrollArea,
                              QPushButton, QSlider, QButtonGroup, QRadioButton, QGroupBox)
-from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, pyqtSignal, QRectF
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QPolygonF, QWheelEvent
+from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, pyqtSignal, QRectF, QEvent
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QPolygonF, QWheelEvent
 from pathlib import Path
 from typing import List, Optional, Tuple
 import numpy as np
+
+
+# Handle size in image pixels for resize grips
+HANDLE_SIZE = 6
+
+# Hit-test tolerance in image pixels
+HIT_TOLERANCE = 6
 
 
 class ImageViewer(QWidget):
@@ -15,7 +23,8 @@ class ImageViewer(QWidget):
 
     box_added = pyqtSignal(int, int, int, int, int)  # x1, y1, x2, y2, class_id
     polygon_added = pyqtSignal(list, int)  # points, class_id
-    annotation_selected = pyqtSignal(int)  # annotation index
+    annotation_selected = pyqtSignal(int)  # annotation index (-1 = deselect)
+    annotation_updated = pyqtSignal(int)   # annotation index that was moved/resized
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,6 +42,20 @@ class ImageViewer(QWidget):
         self.current_rect = None
         self.current_polygon_points = []
         self.selected_annotation = -1
+
+        # Edit state
+        self._edit_action = None   # None, "move", "resize"
+        self._resize_handle = None  # which handle is being dragged
+        self._drag_origin = None   # mouse position at drag start (image coords)
+        self._orig_box = None      # original box coords at drag start (x1,y1,x2,y2)
+
+        # Pan state (click-drag to pan image)
+        self._pan_active = False
+        self._press_screen_pos = None  # screen pos at mouse press
+        self._pan_start_h = 0          # scroll bar value at press
+        self._pan_start_v = 0
+        self._was_dragging = False     # True if mouse moved > threshold
+        _PAN_THRESHOLD = 5             # pixels to distinguish click vs drag
 
         # Zoom
         self.zoom_factor = 1.0
@@ -57,10 +80,23 @@ class ImageViewer(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.image_label)
         self.scroll.setWidgetResizable(True)
+        self.scroll.setMouseTracking(True)
+        self.scroll.viewport().setMouseTracking(True)
+
+        # Forward mouse events from image_label to ImageViewer
+        self.image_label.installEventFilter(self)
 
         main_layout.addWidget(self.scroll)
 
+        self.setMouseTracking(True)
         self.setLayout(main_layout)
+
+    def eventFilter(self, obj, event):
+        """Forward mouse events from image_label so drawing preview works without button held"""
+        if obj is self.image_label and event.type() == QEvent.Type.MouseMove:
+            self.mouseMoveEvent(event)
+            return True
+        return super().eventFilter(obj, event)
 
     def create_toolbar(self):
         """Create toolbar with annotation mode and zoom controls"""
@@ -138,6 +174,8 @@ class ImageViewer(QWidget):
         """Load and display image"""
         self.image_path = image_path
         self.pixmap = QPixmap(str(image_path))
+        self.selected_annotation = -1
+        self._edit_action = None
         self.update_display()
 
     def clear_image(self):
@@ -145,11 +183,16 @@ class ImageViewer(QWidget):
         self.image_path = None
         self.pixmap = None
         self.annotations = []
+        self.selected_annotation = -1
+        self._edit_action = None
         self.image_label.clear()
 
     def set_annotations(self, annotations: List):
         """Set annotations"""
         self.annotations = annotations
+        if self.selected_annotation >= len(self.annotations):
+            self.selected_annotation = -1
+            self._edit_action = None
         self.update_display()
 
     def set_classes(self, class_names: List[str], class_colors: dict):
@@ -161,6 +204,77 @@ class ImageViewer(QWidget):
         """Set current class for drawing"""
         self.current_class = class_id
 
+    def select_annotation(self, index: int):
+        """Programmatically select an annotation (called from LabelWidget)"""
+        self.selected_annotation = index
+        self._edit_action = None
+        self.update_display()
+
+    # ─── Hit Testing ─────────────────────────────────────────────
+
+    def _get_box_abs(self, ann) -> Optional[Tuple[int, int, int, int]]:
+        """Get absolute (x1,y1,x2,y2) for a box annotation"""
+        if not self.pixmap or not hasattr(ann, 'annotation_type'):
+            return None
+        if ann.annotation_type == 'box':
+            return ann.to_absolute(self.pixmap.width(), self.pixmap.height())
+        return None
+
+    def _handle_rects(self, x1, y1, x2, y2):
+        """Return dict of handle-name → (cx, cy) center positions for a box"""
+        mx, my = (x1 + x2) // 2, (y1 + y2) // 2
+        return {
+            'tl': (x1, y1), 'tm': (mx, y1), 'tr': (x2, y1),
+            'ml': (x1, my),                  'mr': (x2, my),
+            'bl': (x1, y2), 'bm': (mx, y2), 'br': (x2, y2),
+        }
+
+    def _hit_test_handles(self, x, y, x1, y1, x2, y2):
+        """Check if (x,y) hits any resize handle. Returns handle name or None."""
+        hs = HANDLE_SIZE + 2  # slightly larger for easier grab
+        for name, (cx, cy) in self._handle_rects(x1, y1, x2, y2).items():
+            if abs(x - cx) <= hs and abs(y - cy) <= hs:
+                return name
+        return None
+
+    def _hit_test_annotations(self, x, y):
+        """Find which annotation is under (x,y). Returns index or -1."""
+        if not self.pixmap:
+            return -1
+        w, h = self.pixmap.width(), self.pixmap.height()
+        # Iterate in reverse so topmost (last drawn) is hit first
+        for i in range(len(self.annotations) - 1, -1, -1):
+            ann = self.annotations[i]
+            if not hasattr(ann, 'annotation_type'):
+                continue
+            if ann.annotation_type == 'box':
+                bx1, by1, bx2, by2 = ann.to_absolute(w, h)
+                if bx1 - HIT_TOLERANCE <= x <= bx2 + HIT_TOLERANCE and \
+                   by1 - HIT_TOLERANCE <= y <= by2 + HIT_TOLERANCE:
+                    return i
+            elif ann.annotation_type == 'polygon':
+                pts = ann.to_absolute(w, h)
+                if self._point_in_polygon(x, y, pts):
+                    return i
+        return -1
+
+    @staticmethod
+    def _point_in_polygon(px, py, polygon_pts):
+        """Ray-casting point-in-polygon test"""
+        n = len(polygon_pts)
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = polygon_pts[i]
+            xj, yj = polygon_pts[j]
+            if ((yi > py) != (yj > py)) and \
+               (px < (xj - xi) * (py - yi) / (yj - yi + 1e-9) + xi):
+                inside = not inside
+            j = i
+        return inside
+
+    # ─── Display ─────────────────────────────────────────────────
+
     def update_display(self):
         """Update image display with annotations"""
         if self.pixmap is None:
@@ -169,31 +283,48 @@ class ImageViewer(QWidget):
         # Create a copy of pixmap to draw on
         display_pixmap = self.pixmap.copy()
         painter = QPainter(display_pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        img_w, img_h = self.pixmap.width(), self.pixmap.height()
 
         # Draw existing annotations
         for i, ann in enumerate(self.annotations):
+            is_selected = (i == self.selected_annotation)
             color = self.class_colors.get(ann.class_id, (255, 255, 255))
-            pen = QPen(QColor(*color))
-            pen.setWidth(3 if i == self.selected_annotation else 2)
+            qcolor = QColor(*color)
+
+            # Pen: thicker + dashed for selected
+            pen = QPen(qcolor)
+            if is_selected:
+                pen.setWidth(3)
+            else:
+                pen.setWidth(2)
             painter.setPen(pen)
+
+            # Semi-transparent fill for selected
+            if is_selected:
+                fill = QColor(*color, 40)
+                painter.setBrush(QBrush(fill))
+            else:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
 
             # Draw based on annotation type
             if hasattr(ann, 'annotation_type'):
                 if ann.annotation_type == 'box':
-                    x1, y1, x2, y2 = ann.to_absolute(
-                        self.pixmap.width(), self.pixmap.height()
-                    )
-                    painter.drawRect(x1, y1, x2-x1, y2-y1)
+                    x1, y1, x2, y2 = ann.to_absolute(img_w, img_h)
+                    painter.drawRect(x1, y1, x2 - x1, y2 - y1)
 
-                    # Draw label
+                    # Draw label background + text
                     if ann.class_id < len(self.class_names):
                         label = self.class_names[ann.class_id]
-                        painter.drawText(x1, y1-5, label)
+                        self._draw_label_tag(painter, label, x1, y1, qcolor)
+
+                    # Draw resize handles for selected box
+                    if is_selected:
+                        self._draw_handles(painter, x1, y1, x2, y2, qcolor)
 
                 elif ann.annotation_type == 'polygon':
-                    points = ann.to_absolute(
-                        self.pixmap.width(), self.pixmap.height()
-                    )
+                    points = ann.to_absolute(img_w, img_h)
                     qpoints = [QPointF(x, y) for x, y in points]
                     polygon = QPolygonF(qpoints)
                     painter.drawPolygon(polygon)
@@ -201,14 +332,31 @@ class ImageViewer(QWidget):
                     # Draw label
                     if ann.class_id < len(self.class_names) and points:
                         label = self.class_names[ann.class_id]
-                        painter.drawText(int(points[0][0]), int(points[0][1])-5, label)
+                        self._draw_label_tag(painter, label, int(points[0][0]), int(points[0][1]), qcolor)
+
+            painter.setBrush(Qt.BrushStyle.NoBrush)
 
         # Draw current drawing
         if self.annotation_mode == "box" and self.current_rect:
+            # Semi-transparent fill
+            fill = QColor(0, 255, 0, 30)
+            painter.setBrush(QBrush(fill))
             pen = QPen(QColor(0, 255, 0))
             pen.setWidth(2)
+            pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(self.current_rect)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            # Draw size label
+            rw = self.current_rect.width()
+            rh = self.current_rect.height()
+            size_text = f"{rw} x {rh}"
+            font = painter.font()
+            font.setPixelSize(12)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor(0, 255, 0)))
+            painter.drawText(self.current_rect.x(), self.current_rect.bottom() + 14, size_text)
 
         elif self.annotation_mode == "polygon" and len(self.current_polygon_points) > 0:
             pen = QPen(QColor(0, 255, 0))
@@ -216,20 +364,14 @@ class ImageViewer(QWidget):
             painter.setPen(pen)
 
             # Draw lines between points
-            for i in range(len(self.current_polygon_points) - 1):
-                p1 = self.current_polygon_points[i]
-                p2 = self.current_polygon_points[i + 1]
+            for idx in range(len(self.current_polygon_points) - 1):
+                p1 = self.current_polygon_points[idx]
+                p2 = self.current_polygon_points[idx + 1]
                 painter.drawLine(p1, p2)
 
             # Draw points
             for point in self.current_polygon_points:
                 painter.drawEllipse(point, 3, 3)
-
-            # Draw line from last point to cursor (if drawing)
-            if self.drawing and len(self.current_polygon_points) > 0:
-                # This will be drawn during mouse move
-
-                pass
 
         painter.end()
 
@@ -243,6 +385,36 @@ class ImageViewer(QWidget):
             )
 
         self.image_label.setPixmap(display_pixmap)
+
+    def _draw_label_tag(self, painter: QPainter, label: str, x: int, y: int, color: QColor):
+        """Draw a label tag with background above annotation"""
+        font = painter.font()
+        font.setPixelSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        text_w = metrics.horizontalAdvance(label) + 8
+        text_h = metrics.height() + 4
+        tag_y = y - text_h
+        if tag_y < 0:
+            tag_y = y
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(color))
+        painter.drawRect(x, tag_y, text_w, text_h)
+
+        painter.setPen(QPen(QColor(0, 0, 0)))
+        painter.drawText(x + 4, tag_y + metrics.ascent() + 2, label)
+
+    def _draw_handles(self, painter: QPainter, x1, y1, x2, y2, color: QColor):
+        """Draw resize handles on selected box annotation"""
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.setBrush(QBrush(color))
+        hs = HANDLE_SIZE
+        for _, (cx, cy) in self._handle_rects(x1, y1, x2, y2).items():
+            painter.drawRect(cx - hs, cy - hs, hs * 2, hs * 2)
+
+    # ─── Coordinate Conversion ───────────────────────────────────
 
     def get_image_coordinates(self, widget_pos):
         """Convert widget coordinates to image coordinates"""
@@ -275,66 +447,248 @@ class ImageViewer(QWidget):
 
         return QPoint(original_x, original_y)
 
+    # ─── Mouse Events ────────────────────────────────────────────
+    #
+    # Interaction model:
+    #   Click+drag          → Pan image (scroll view)
+    #   Click+release       → Start drawing ROI (1st corner) / Finish ROI (2nd corner)
+    #   Click on annotation → Select it
+    #   Drag on selected    → Move / Resize (handles)
+    #   Right-click         → Finish polygon
+    #   ESC                 → Cancel / Deselect
+
+    _PAN_THRESHOLD = 5  # pixels to distinguish click from drag
+
     def mousePressEvent(self, event):
-        """Handle mouse press for drawing"""
+        """Handle mouse press"""
         if not self.pixmap:
             return
 
-        # Get position relative to scroll area content
-        widget_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
-        img_pos = self.get_image_coordinates(widget_pos)
-
-        if img_pos is None:
-            return
-
         if event.button() == Qt.MouseButton.LeftButton:
-            if self.annotation_mode == "box":
-                self.start_point = img_pos
-                self.drawing = True
+            # Record press position for click-vs-drag detection
+            self._press_screen_pos = event.globalPosition().toPoint()
+            self._was_dragging = False
 
-            elif self.annotation_mode == "polygon":
-                # Add point to polygon
-                self.current_polygon_points.append(img_pos)
-                self.drawing = True
-                self.update_display()
+            widget_pos = self.image_label.mapFromGlobal(self._press_screen_pos)
+            img_pos = self.get_image_coordinates(widget_pos)
+
+            if img_pos is None:
+                # Press outside image → prepare pan only
+                self._pan_active = True
+                self._pan_start_h = self.scroll.horizontalScrollBar().value()
+                self._pan_start_v = self.scroll.verticalScrollBar().value()
+                return
+
+            ix, iy = img_pos.x(), img_pos.y()
+
+            # --- Priority 1: Resize handle of selected annotation ---
+            if 0 <= self.selected_annotation < len(self.annotations):
+                ann = self.annotations[self.selected_annotation]
+                box = self._get_box_abs(ann)
+                if box:
+                    handle = self._hit_test_handles(ix, iy, *box)
+                    if handle:
+                        self._edit_action = "resize"
+                        self._resize_handle = handle
+                        self._drag_origin = (ix, iy)
+                        self._orig_box = box
+                        return
+
+            # --- Priority 2: Move selected annotation body ---
+            if 0 <= self.selected_annotation < len(self.annotations):
+                ann = self.annotations[self.selected_annotation]
+                box = self._get_box_abs(ann)
+                if box:
+                    bx1, by1, bx2, by2 = box
+                    if bx1 - HIT_TOLERANCE <= ix <= bx2 + HIT_TOLERANCE and \
+                       by1 - HIT_TOLERANCE <= iy <= by2 + HIT_TOLERANCE:
+                        self._edit_action = "move"
+                        self._drag_origin = (ix, iy)
+                        self._orig_box = box
+                        return
+
+            # --- Otherwise: prepare for pan (will decide click vs drag on release) ---
+            self._pan_active = True
+            self._pan_start_h = self.scroll.horizontalScrollBar().value()
+            self._pan_start_v = self.scroll.verticalScrollBar().value()
 
         elif event.button() == Qt.MouseButton.RightButton:
-            # Finish polygon on right click
             if self.annotation_mode == "polygon" and len(self.current_polygon_points) >= 3:
                 self.finish_polygon()
 
     def mouseMoveEvent(self, event):
-        """Handle mouse move for drawing"""
+        """Handle mouse move for pan, edit, and drawing preview"""
         if not self.pixmap:
             return
 
+        # --- Annotation editing (move/resize) ---
+        if self._edit_action in ("move", "resize"):
+            widget_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
+            img_pos = self.get_image_coordinates(widget_pos)
+            if img_pos is None:
+                return
+            ix, iy = img_pos.x(), img_pos.y()
+
+            if self._edit_action == "move" and self._drag_origin and self._orig_box:
+                dx = ix - self._drag_origin[0]
+                dy = iy - self._drag_origin[1]
+                ox1, oy1, ox2, oy2 = self._orig_box
+                img_w, img_h = self.pixmap.width(), self.pixmap.height()
+                nx1 = max(0, min(ox1 + dx, img_w - (ox2 - ox1)))
+                ny1 = max(0, min(oy1 + dy, img_h - (oy2 - oy1)))
+                nx2 = nx1 + (ox2 - ox1)
+                ny2 = ny1 + (oy2 - oy1)
+                self._apply_box_coords(self.selected_annotation, nx1, ny1, nx2, ny2)
+                self.update_display()
+
+            elif self._edit_action == "resize" and self._drag_origin and self._orig_box:
+                ox1, oy1, ox2, oy2 = self._orig_box
+                dx = ix - self._drag_origin[0]
+                dy = iy - self._drag_origin[1]
+                nx1, ny1, nx2, ny2 = ox1, oy1, ox2, oy2
+                h = self._resize_handle
+                img_w, img_h = self.pixmap.width(), self.pixmap.height()
+                if h in ('tl', 'ml', 'bl'):
+                    nx1 = max(0, min(ox1 + dx, ox2 - 4))
+                if h in ('tr', 'mr', 'br'):
+                    nx2 = max(ox1 + 4, min(ox2 + dx, img_w))
+                if h in ('tl', 'tm', 'tr'):
+                    ny1 = max(0, min(oy1 + dy, oy2 - 4))
+                if h in ('bl', 'bm', 'br'):
+                    ny2 = max(oy1 + 4, min(oy2 + dy, img_h))
+                self._apply_box_coords(self.selected_annotation, nx1, ny1, nx2, ny2)
+                self.update_display()
+            return
+
+        # --- Pan (click-drag to scroll image) ---
+        if self._pan_active and self._press_screen_pos is not None:
+            current_pos = event.globalPosition().toPoint()
+            dx = current_pos.x() - self._press_screen_pos.x()
+            dy = current_pos.y() - self._press_screen_pos.y()
+            if abs(dx) > self._PAN_THRESHOLD or abs(dy) > self._PAN_THRESHOLD:
+                self._was_dragging = True
+            if self._was_dragging:
+                self.scroll.horizontalScrollBar().setValue(self._pan_start_h - dx)
+                self.scroll.verticalScrollBar().setValue(self._pan_start_v - dy)
+            return
+
+        # --- Drawing preview: box follows mouse after first click ---
+        if self.drawing and self.annotation_mode == "box" and self.start_point:
+            widget_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
+            img_pos = self.get_image_coordinates(widget_pos)
+            if img_pos:
+                self.current_rect = QRect(self.start_point, img_pos).normalized()
+                self.update_display()
+
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release"""
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        # --- Finish annotation edit ---
+        if self._edit_action in ("move", "resize"):
+            if self.selected_annotation >= 0:
+                self.annotation_updated.emit(self.selected_annotation)
+            self._edit_action = None
+            self._drag_origin = None
+            self._orig_box = None
+            self._resize_handle = None
+            return
+
+        was_pan = self._pan_active
+        was_dragging = self._was_dragging
+        self._pan_active = False
+
+        # If it was a drag → pan done, nothing else to do
+        if was_dragging:
+            return
+
+        # --- It was a click (no drag) ---
         widget_pos = self.image_label.mapFromGlobal(event.globalPosition().toPoint())
         img_pos = self.get_image_coordinates(widget_pos)
-
         if img_pos is None:
             return
 
-        if self.annotation_mode == "box" and self.drawing and self.start_point:
+        ix, iy = img_pos.x(), img_pos.y()
+
+        # --- If currently drawing a box: second click → finish ---
+        if self.drawing and self.annotation_mode == "box" and self.start_point:
             self.current_rect = QRect(self.start_point, img_pos).normalized()
+            self.finish_box()
+            return
+
+        # --- Click on annotation → select it ---
+        hit_idx = self._hit_test_annotations(ix, iy)
+        if hit_idx >= 0:
+            self.selected_annotation = hit_idx
+            self._edit_action = None
+            self.annotation_selected.emit(hit_idx)
+            self.update_display()
+            return
+
+        # --- Click on empty area ---
+        # Deselect if something was selected
+        if self.selected_annotation >= 0:
+            self.selected_annotation = -1
+            self._edit_action = None
+            self.annotation_selected.emit(-1)
             self.update_display()
 
-    def mouseReleaseEvent(self, event):
-        """Handle mouse release to finish drawing"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            if self.annotation_mode == "box" and self.drawing:
-                self.finish_box()
+        # Start drawing: first click
+        if self.annotation_mode == "box":
+            self.start_point = img_pos
+            self.drawing = True
+            self.current_rect = None
+            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
+
+        elif self.annotation_mode == "polygon":
+            self.current_polygon_points.append(img_pos)
+            self.drawing = True
+            self.update_display()
 
     def mouseDoubleClickEvent(self, event):
         """Handle double click to finish polygon"""
         if self.annotation_mode == "polygon" and len(self.current_polygon_points) >= 3:
             self.finish_polygon()
 
+    def keyPressEvent(self, event):
+        """Handle Escape to cancel drawing or deselect"""
+        if event.key() == Qt.Key.Key_Escape:
+            if self.drawing:
+                # Cancel current drawing
+                self.drawing = False
+                self.start_point = None
+                self.current_rect = None
+                self.current_polygon_points = []
+                self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
+                self.update_display()
+            elif self.selected_annotation >= 0:
+                self.selected_annotation = -1
+                self._edit_action = None
+                self.annotation_selected.emit(-1)
+                self.update_display()
+        super().keyPressEvent(event)
+
+    # ─── Annotation Editing Helpers ──────────────────────────────
+
+    def _apply_box_coords(self, idx, x1, y1, x2, y2):
+        """Apply new absolute coords to a box annotation in-place"""
+        ann = self.annotations[idx]
+        if ann.annotation_type != 'box':
+            return
+        img_w, img_h = self.pixmap.width(), self.pixmap.height()
+        ann.x_center = ((x1 + x2) / 2) / img_w
+        ann.y_center = ((y1 + y2) / 2) / img_h
+        ann.width = (x2 - x1) / img_w
+        ann.height = (y2 - y1) / img_h
+
+    # ─── Drawing Finishers ───────────────────────────────────────
+
     def finish_box(self):
         """Finish drawing bounding box"""
         if not self.start_point or not self.current_rect:
             return
 
-        # Coordinates are already in original image space (converted in get_image_coordinates)
         x1 = int(self.current_rect.x())
         y1 = int(self.current_rect.y())
         x2 = int(self.current_rect.right())
@@ -347,6 +701,7 @@ class ImageViewer(QWidget):
         self.drawing = False
         self.start_point = None
         self.current_rect = None
+        self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
         self.update_display()
 
     def finish_polygon(self):
@@ -354,7 +709,6 @@ class ImageViewer(QWidget):
         if len(self.current_polygon_points) < 3:
             return
 
-        # Coordinates are already in original image space (converted in get_image_coordinates)
         points = []
         for point in self.current_polygon_points:
             x = int(point.x())
@@ -368,6 +722,8 @@ class ImageViewer(QWidget):
         self.drawing = False
         self.current_polygon_points = []
         self.update_display()
+
+    # ─── Zoom ────────────────────────────────────────────────────
 
     def wheelEvent(self, event: QWheelEvent):
         """Handle mouse wheel for zooming"""
