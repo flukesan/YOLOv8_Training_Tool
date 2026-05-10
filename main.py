@@ -17,6 +17,19 @@ from config.settings import Settings
 
 def main():
     """Main function"""
+    # Create application directories with error handling
+    try:
+        Settings.create_default_directories()
+    except PermissionError as e:
+        print(f"Error: Cannot create application directories: {e}")
+        print("Please check file permissions or run with appropriate privileges.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error during initialization: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
     # Enable High DPI scaling
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -27,11 +40,15 @@ def main():
     app.setApplicationName(Settings.APP_NAME)
     app.setApplicationVersion(Settings.APP_VERSION)
 
-    # Load stylesheet if exists
+    # Load stylesheet if exists (with error handling)
     style_path = Settings.STYLES_DIR / 'style.qss'
     if style_path.exists():
-        with open(style_path, 'r') as f:
-            app.setStyleSheet(f.read())
+        try:
+            with open(style_path, 'r', encoding='utf-8') as f:
+                app.setStyleSheet(f.read())
+        except Exception as e:
+            print(f"Warning: Could not load stylesheet: {e}")
+            # Continue without stylesheet
 
     # Create and show main window
     window = MainWindow()

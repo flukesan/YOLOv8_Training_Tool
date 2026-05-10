@@ -263,123 +263,44 @@ class TrainingWidget(QWidget):
         )
         strategy_section.add_row("", self.cos_lr_check)
 
-        layout.addWidget(strategy_section)
-
-        # === Advanced Options (collapsible) ===
-        advanced_section = CollapsibleSection("Advanced Options")
-
-        # Device selection
-        self.device_combo = QComboBox()
-        self.device_combo.addItem(
-            f"Auto ({self._detected_device['recommended']})", ''
+        # Image size
+        self.imgsz_combo = QComboBox()
+        self.imgsz_combo.addItems(['320', '416', '512', '640', '736', '832', '1024', '1280'])
+        self.imgsz_combo.setCurrentText(str(default_params.get('imgsz', 640)))
+        self.imgsz_combo.setToolTip(
+            "Input image size for training\n"
+            "• 320-512: Fast training, lower accuracy\n"
+            "• 640: Recommended balance\n"
+            "• 832-1280: Slower but better for small objects"
         )
-        if self._detected_device['has_cuda']:
-            for i in range(self._detected_device['cuda_count']):
-                try:
-                    import torch
-                    name = torch.cuda.get_device_name(i)
-                    self.device_combo.addItem(f"GPU {i}: {name}", str(i))
-                except Exception:
-                    self.device_combo.addItem(f"GPU {i}", str(i))
-        self.device_combo.addItem("CPU (slow)", 'cpu')
-        self.device_combo.setToolTip(
-            "Compute device for training.\n"
-            "GPU is strongly recommended for reasonable training speed."
+        param_layout.addRow("Image Size:", self.imgsz_combo)
+
+        # Patience (early stopping)
+        self.patience_spin = QSpinBox()
+        self.patience_spin.setRange(0, 200)
+        self.patience_spin.setValue(default_params.get('patience', 50))
+        self.patience_spin.setToolTip(
+            "Epochs to wait for improvement before early stopping\n"
+            "0 = disabled (train all epochs)\n"
+            "50 = stop if no improvement for 50 epochs (recommended)"
         )
-        advanced_section.add_row("Device:", self.device_combo)
+        param_layout.addRow("Patience:", self.patience_spin)
 
-        # Workers
-        self.workers_spin = QSpinBox()
-        self.workers_spin.setRange(0, 32)
-        self.workers_spin.setValue(default_params.get('workers', 8))
-        self.workers_spin.setToolTip(
-            "Number of data loading workers.\n"
-            "More workers = faster data loading.\n"
-            "Set to 0 if you experience data loading issues."
+        # Augmentation preset
+        self.aug_preset_combo = QComboBox()
+        self.aug_preset_combo.addItems(['light', 'medium', 'heavy', 'industrial'])
+        self.aug_preset_combo.setCurrentText('industrial')
+        self.aug_preset_combo.setToolTip(
+            "Data augmentation preset:\n"
+            "• light: Stable environments\n"
+            "• medium: General purpose\n"
+            "• heavy: Varied environments\n"
+            "• industrial: Go/NoGo inspection (recommended)"
         )
-        advanced_section.add_row("Data Workers:", self.workers_spin)
+        param_layout.addRow("Augmentation:", self.aug_preset_combo)
 
-        # Cache
-        self.cache_combo = QComboBox()
-        cache_options = [
-            ('None - Load from disk each time', 'none'),
-            ('RAM - Cache in memory (fastest, needs RAM)', 'ram'),
-            ('Disk - Cache on disk', 'disk'),
-        ]
-        for label, value in cache_options:
-            self.cache_combo.addItem(label, value)
-        self.cache_combo.setToolTip(
-            "Dataset caching:\n"
-            "  None: Read from disk (default, lowest memory)\n"
-            "  RAM: Cache in memory (fast, but needs lots of RAM)\n"
-            "  Disk: Cache to disk (balance)"
-        )
-        advanced_section.add_row("Cache:", self.cache_combo)
-
-        # AMP
-        self.amp_check = QCheckBox("Mixed Precision Training (AMP)")
-        self.amp_check.setChecked(default_params.get('amp', True))
-        self.amp_check.setToolTip(
-            "Automatic Mixed Precision.\n"
-            "Speeds up training and reduces GPU memory usage.\n"
-            "Recommended to keep enabled."
-        )
-        advanced_section.add_row("", self.amp_check)
-
-        # Multi-scale
-        self.multiscale_check = QCheckBox("Multi-scale Training")
-        self.multiscale_check.setToolTip(
-            "Vary input image size during training.\n"
-            "Can improve model robustness at different scales."
-        )
-        advanced_section.add_row("", self.multiscale_check)
-
-        # Freeze backbone
-        self.freeze_spin = QSpinBox()
-        self.freeze_spin.setRange(0, 24)
-        self.freeze_spin.setValue(0)
-        self.freeze_spin.setSpecialValueText("None (0)")
-        self.freeze_spin.setToolTip(
-            "Number of backbone layers to freeze.\n"
-            "Useful for transfer learning / fine-tuning.\n"
-            "Set to 0 to train all layers (default).\n"
-            "Set to 10 to freeze the backbone (faster training)."
-        )
-        advanced_section.add_row("Freeze Layers:", self.freeze_spin)
-
-        # Seed
-        self.seed_spin = QSpinBox()
-        self.seed_spin.setRange(0, 99999)
-        self.seed_spin.setValue(default_params.get('seed', 0))
-        self.seed_spin.setToolTip("Random seed for reproducibility.")
-        advanced_section.add_row("Random Seed:", self.seed_spin)
-
-        layout.addWidget(advanced_section)
-
-        # === Progress Section ===
-        progress_group = QGroupBox("Training Progress")
-        progress_layout = QVBoxLayout()
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("Ready")
-        progress_layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel("Ready to train")
-        self.status_label.setStyleSheet("color: #888;")
-        progress_layout.addWidget(self.status_label)
-
-        self.eta_label = QLabel("")
-        self.eta_label.setStyleSheet("color: #888; font-size: 11px;")
-        progress_layout.addWidget(self.eta_label)
-
-        progress_group.setLayout(progress_layout)
-        layout.addWidget(progress_group)
-
-        # === Control Buttons ===
-        btn_layout = QHBoxLayout()
+        param_group.setLayout(param_layout)
+        layout.addWidget(param_group)
 
         self.btn_start = QPushButton("Start Training")
         self.btn_start.setStyleSheet(
@@ -474,8 +395,22 @@ class TrainingWidget(QWidget):
             ctrl.setEnabled(enabled)
 
     def _on_start(self):
-        """Handle start training - collect all config"""
-        config = self.get_training_config()
+        """Handle start training"""
+        config = {
+            'epochs': self.epochs_spin.value(),
+            'batch': self.batch_spin.value(),
+            'lr0': self.lr_spin.value(),
+            'model': self.model_combo.currentData(),
+            'imgsz': int(self.imgsz_combo.currentText()),
+            'patience': self.patience_spin.value(),
+        }
+
+        # Add augmentation preset parameters
+        preset_name = self.aug_preset_combo.currentText()
+        from config.settings import Settings
+        preset = Settings.AUGMENTATION_PRESETS.get(preset_name, {})
+        config.update(preset)
+
         self.start_training.emit(config)
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)

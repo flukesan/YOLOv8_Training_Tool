@@ -60,19 +60,38 @@ class BoundingBox(Annotation):
 
     @classmethod
     def from_yolo_format(cls, line: str):
-        """Create BoundingBox from YOLO format line"""
-        parts = line.strip().split()
-        if len(parts) < 5:
+        """Create BoundingBox from YOLO format line with error handling"""
+        try:
+            parts = line.strip().split()
+            if len(parts) < 5:
+                print(f"Warning: Invalid label format (need at least 5 values): {line.strip()}")
+                return None
+
+            class_id = int(parts[0])
+            x_center = float(parts[1])
+            y_center = float(parts[2])
+            width = float(parts[3])
+            height = float(parts[4])
+            confidence = float(parts[5]) if len(parts) > 5 else 1.0
+
+            # Validate ranges
+            if not (0 <= x_center <= 1 and 0 <= y_center <= 1):
+                print(f"Warning: Center coordinates out of range [0,1]: x={x_center}, y={y_center}")
+                return None
+
+            if not (0 < width <= 1 and 0 < height <= 1):
+                print(f"Warning: Width/height out of range (0,1]: w={width}, h={height}")
+                return None
+
+            if class_id < 0:
+                print(f"Warning: Negative class ID: {class_id}")
+                return None
+
+            return cls(class_id, x_center, y_center, width, height, confidence)
+
+        except (ValueError, IndexError) as e:
+            print(f"Warning: Cannot parse label line '{line.strip()}': {e}")
             return None
-
-        class_id = int(parts[0])
-        x_center = float(parts[1])
-        y_center = float(parts[2])
-        width = float(parts[3])
-        height = float(parts[4])
-        confidence = float(parts[5]) if len(parts) > 5 else 1.0
-
-        return cls(class_id, x_center, y_center, width, height, confidence)
 
     def __repr__(self):
         return f"BoundingBox(class={self.class_id}, x={self.x_center:.3f}, y={self.y_center:.3f}, w={self.width:.3f}, h={self.height:.3f})"
@@ -105,25 +124,42 @@ class Polygon(Annotation):
 
     @classmethod
     def from_yolo_seg_format(cls, line: str):
-        """Create Polygon from YOLO segmentation format line"""
-        parts = line.strip().split()
-        if len(parts) < 7:  # At least class_id + 3 points (x,y pairs)
+        """Create Polygon from YOLO segmentation format line with error handling"""
+        try:
+            parts = line.strip().split()
+            if len(parts) < 7:  # At least class_id + 3 points (x,y pairs)
+                print(f"Warning: Invalid polygon format (need class_id + at least 3 points): {line.strip()}")
+                return None
+
+            class_id = int(parts[0])
+
+            if class_id < 0:
+                print(f"Warning: Negative class ID in polygon: {class_id}")
+                return None
+
+            # Parse points
+            points = []
+            for i in range(1, len(parts), 2):
+                if i + 1 < len(parts):
+                    x = float(parts[i])
+                    y = float(parts[i + 1])
+
+                    # Validate point coordinates
+                    if not (0 <= x <= 1 and 0 <= y <= 1):
+                        print(f"Warning: Polygon point out of range [0,1]: ({x}, {y})")
+                        return None
+
+                    points.append((x, y))
+
+            if len(points) < 3:  # Need at least 3 points for a polygon
+                print(f"Warning: Polygon has fewer than 3 points: {len(points)}")
+                return None
+
+            return cls(class_id, points)
+
+        except (ValueError, IndexError) as e:
+            print(f"Warning: Cannot parse polygon line '{line.strip()}': {e}")
             return None
-
-        class_id = int(parts[0])
-
-        # Parse points
-        points = []
-        for i in range(1, len(parts), 2):
-            if i + 1 < len(parts):
-                x = float(parts[i])
-                y = float(parts[i + 1])
-                points.append((x, y))
-
-        if len(points) < 3:  # Need at least 3 points for a polygon
-            return None
-
-        return cls(class_id, points)
 
     def get_bounding_box(self) -> Tuple[float, float, float, float]:
         """Get bounding box of polygon (x_min, y_min, x_max, y_max)"""
@@ -252,25 +288,48 @@ class LabelManager:
 
         return stats
 
-    def validate_annotation(self, bbox: BoundingBox) -> Tuple[bool, Optional[str]]:
+    def validate_annotation(self, annotation: Union[BoundingBox, Polygon]) -> Tuple[bool, Optional[str]]:
         """
-        Validate a bounding box annotation
+        Validate an annotation (BoundingBox or Polygon)
         Returns: (is_valid, error_message)
         """
-        # Check if coordinates are in valid range [0, 1]
-        if not (0 <= bbox.x_center <= 1 and 0 <= bbox.y_center <= 1):
-            return False, "Center coordinates must be between 0 and 1"
+        if isinstance(annotation, BoundingBox):
+            # Check if coordinates are in valid range [0, 1]
+            if not (0 <= annotation.x_center <= 1 and 0 <= annotation.y_center <= 1):
+                return False, "Center coordinates must be between 0 and 1"
 
-        if not (0 < bbox.width <= 1 and 0 < bbox.height <= 1):
-            return False, "Width and height must be between 0 and 1"
+            if not (0 < annotation.width <= 1 and 0 < annotation.height <= 1):
+                return False, "Width and height must be between 0 and 1"
 
-        # Check if class_id is valid
-        if bbox.class_id < 0 or bbox.class_id >= len(self.classes):
-            return False, f"Invalid class ID: {bbox.class_id}"
+            # Check if class_id is valid
+            if self.classes:  # Only validate if classes are set
+                if annotation.class_id < 0 or annotation.class_id >= len(self.classes):
+                    return False, f"Invalid class ID: {annotation.class_id}"
+            else:
+                # Just check it's non-negative
+                if annotation.class_id < 0:
+                    return False, f"Class ID must be non-negative, got {annotation.class_id}"
 
-        # Check if box is too small (might be noise)
-        if bbox.width < 0.001 or bbox.height < 0.001:
-            return False, "Bounding box is too small"
+            # Check if box is too small (might be noise)
+            if annotation.width < 0.001 or annotation.height < 0.001:
+                return False, "Bounding box is too small"
+
+        elif isinstance(annotation, Polygon):
+            # Validate polygon
+            if len(annotation.points) < 3:
+                return False, "Polygon must have at least 3 points"
+
+            for x, y in annotation.points:
+                if not (0 <= x <= 1 and 0 <= y <= 1):
+                    return False, f"Polygon point ({x}, {y}) out of range [0,1]"
+
+            # Check if class_id is valid
+            if self.classes:
+                if annotation.class_id < 0 or annotation.class_id >= len(self.classes):
+                    return False, f"Invalid class ID: {annotation.class_id}"
+            else:
+                if annotation.class_id < 0:
+                    return False, f"Class ID must be non-negative, got {annotation.class_id}"
 
         return True, None
 
