@@ -2,7 +2,7 @@
 Model Trainer - handles YOLO model training operations
 """
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Tuple
 import threading
 import time
 from config.settings import Settings
@@ -58,11 +58,13 @@ class ModelTrainer:
         self.training_thread: Optional[threading.Thread] = None
         self.stop_flag = threading.Event()
         self.pause_flag = threading.Event()
+        self.session_lock = threading.Lock()  # Thread safety for session access
         self.callbacks = {
             'on_epoch_end': [],
             'on_train_start': [],
             'on_train_end': [],
-            'on_val_end': []
+            'on_val_end': [],
+            'on_train_error': []  # Add error callback
         }
 
     def register_callback(self, event: str, callback: Callable):
@@ -120,6 +122,49 @@ class ModelTrainer:
 
         return self.current_session
 
+    def _validate_config(self, config: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Validate training configuration
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        # Check epochs
+        epochs = config.get('epochs', 0)
+        if epochs <= 0:
+            return False, f"Epochs must be positive, got {epochs}"
+
+        if epochs > 10000:
+            return False, f"Epochs too large ({epochs}), maximum is 10000"
+
+        # Check batch size
+        batch = config.get('batch', 0)
+        if batch <= 0:
+            return False, f"Batch size must be positive, got {batch}"
+
+        # Check image size (must be divisible by 32 for YOLO)
+        imgsz = config.get('imgsz', 640)
+        if imgsz % 32 != 0:
+            return False, f"Image size must be divisible by 32, got {imgsz}"
+
+        if imgsz < 32 or imgsz > 2048:
+            return False, f"Image size must be between 32 and 2048, got {imgsz}"
+
+        # Check learning rate
+        lr0 = config.get('lr0', 0.01)
+        if not (0 < lr0 < 1):
+            return False, f"Learning rate must be between 0 and 1, got {lr0}"
+
+        # Check data file exists
+        data_file = Path(config.get('data', ''))
+        if not data_file.exists():
+            return False, f"Data file not found: {data_file}"
+
+        # Check patience
+        patience = config.get('patience', 50)
+        if patience < 0:
+            return False, f"Patience must be non-negative, got {patience}"
+
+        return True, None
+
     def _prepare_training_config(self, config: Dict[str, Any],
                                  data_yaml_path: Path,
                                  model_name: str) -> Dict[str, Any]:
@@ -140,6 +185,11 @@ class ModelTrainer:
 
         if not train_config.get('name'):
             train_config['name'] = f"exp_{int(time.time())}"
+
+        # Validate configuration
+        valid, error_msg = self._validate_config(train_config)
+        if not valid:
+            raise ValueError(f"Invalid training configuration: {error_msg}")
 
         return train_config
 
@@ -170,9 +220,6 @@ class ModelTrainer:
                         trainer.stop = True
                         return
 
-                # Update session
-                self.current_session.current_epoch = trainer.epoch + 1
-
                 # Extract metrics
                 metrics = {}
                 if hasattr(trainer, 'loss_items'):
@@ -189,7 +236,11 @@ class ModelTrainer:
                         'mAP50-95': float(results.get('metrics/mAP50-95(B)', 0.0)),
                     })
 
-                self.current_session.update_metrics(metrics)
+                # Update session (thread-safe)
+                with self.session_lock:
+                    self.current_session.current_epoch = trainer.epoch + 1
+                    self.current_session.update_metrics(metrics)
+
                 self._trigger_callbacks('on_epoch_end', self.current_session, metrics)
 
             # Register callback with YOLO model
@@ -245,19 +296,20 @@ class ModelTrainer:
                 self.current_session.status in ['running', 'paused'])
 
     def get_current_metrics(self) -> Dict[str, Any]:
-        """Get current training metrics"""
-        if self.current_session is None:
-            return {}
+        """Get current training metrics (thread-safe)"""
+        with self.session_lock:
+            if self.current_session is None:
+                return {}
 
-        return {
-            'epoch': self.current_session.current_epoch,
-            'total_epochs': self.current_session.total_epochs,
-            'progress': self.current_session.get_progress(),
-            'elapsed_time': self.current_session.get_elapsed_time(),
-            'status': self.current_session.status,
-            'metrics': self.current_session.metrics,
-            'best_metrics': self.current_session.best_metrics
-        }
+            return {
+                'epoch': self.current_session.current_epoch,
+                'total_epochs': self.current_session.total_epochs,
+                'progress': self.current_session.get_progress(),
+                'elapsed_time': self.current_session.get_elapsed_time(),
+                'status': self.current_session.status,
+                'metrics': self.current_session.metrics.copy(),  # Return copy for safety
+                'best_metrics': self.current_session.best_metrics.copy() if self.current_session.best_metrics else {}
+            }
 
     def resume_from_checkpoint(self, checkpoint_path: Path,
                               config: Dict[str, Any] = None) -> TrainingSession:

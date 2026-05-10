@@ -7,6 +7,11 @@ from typing import Dict, Any
 import yaml
 
 
+# Safe worker count (don't exceed CPU cores)
+_cpu_count = os.cpu_count() or 1
+_safe_workers = min(8, max(1, _cpu_count - 1))  # Leave 1 core free
+
+
 class Settings:
     """Application settings manager"""
 
@@ -49,7 +54,7 @@ class Settings:
         'resume': False,
         'cache': None,
         'device': '',
-        'workers': 8,
+        'workers': _safe_workers,  # Auto-adjust to CPU count
         'project': None,
         'name': None,
         'exist_ok': False,
@@ -144,8 +149,9 @@ class Settings:
     # Supported annotation formats
     ANNOTATION_FORMATS = ['yolo', 'coco', 'voc', 'labelme']
 
-    # Export formats
-    EXPORT_FORMATS = ['pt', 'onnx', 'tflite', 'torchscript', 'coreml', 'tfjs']
+    # Export formats (all supported formats)
+    EXPORT_FORMATS = ['pt', 'onnx', 'tflite', 'torchscript', 'coreml', 'tfjs',
+                      'engine', 'paddle', 'ncnn']
 
     # UI settings
     UI_SETTINGS = {
@@ -247,5 +253,5 @@ class Settings:
             (structure[split] / 'labels').mkdir(parents=True, exist_ok=True)
 
 
-# Initialize default directories on import
-Settings.create_default_directories()
+# Don't auto-create directories on import - let main.py do it explicitly
+# This allows better error handling and clearer startup sequence

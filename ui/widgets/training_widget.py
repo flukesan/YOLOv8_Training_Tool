@@ -75,6 +75,42 @@ class TrainingWidget(QWidget):
         self.lr_spin.setDecimals(4)
         param_layout.addRow("Learning Rate:", self.lr_spin)
 
+        # Image size
+        self.imgsz_combo = QComboBox()
+        self.imgsz_combo.addItems(['320', '416', '512', '640', '736', '832', '1024', '1280'])
+        self.imgsz_combo.setCurrentText(str(default_params.get('imgsz', 640)))
+        self.imgsz_combo.setToolTip(
+            "Input image size for training\n"
+            "• 320-512: Fast training, lower accuracy\n"
+            "• 640: Recommended balance\n"
+            "• 832-1280: Slower but better for small objects"
+        )
+        param_layout.addRow("Image Size:", self.imgsz_combo)
+
+        # Patience (early stopping)
+        self.patience_spin = QSpinBox()
+        self.patience_spin.setRange(0, 200)
+        self.patience_spin.setValue(default_params.get('patience', 50))
+        self.patience_spin.setToolTip(
+            "Epochs to wait for improvement before early stopping\n"
+            "0 = disabled (train all epochs)\n"
+            "50 = stop if no improvement for 50 epochs (recommended)"
+        )
+        param_layout.addRow("Patience:", self.patience_spin)
+
+        # Augmentation preset
+        self.aug_preset_combo = QComboBox()
+        self.aug_preset_combo.addItems(['light', 'medium', 'heavy', 'industrial'])
+        self.aug_preset_combo.setCurrentText('industrial')
+        self.aug_preset_combo.setToolTip(
+            "Data augmentation preset:\n"
+            "• light: Stable environments\n"
+            "• medium: General purpose\n"
+            "• heavy: Varied environments\n"
+            "• industrial: Go/NoGo inspection (recommended)"
+        )
+        param_layout.addRow("Augmentation:", self.aug_preset_combo)
+
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
 
@@ -104,10 +140,19 @@ class TrainingWidget(QWidget):
         """Handle start training"""
         config = {
             'epochs': self.epochs_spin.value(),
-            'batch': self.batch_spin.value(),  # Changed from 'batch_size' to 'batch'
+            'batch': self.batch_spin.value(),
             'lr0': self.lr_spin.value(),
-            'model': self.model_combo.currentData()  # Get selected model file
+            'model': self.model_combo.currentData(),
+            'imgsz': int(self.imgsz_combo.currentText()),
+            'patience': self.patience_spin.value(),
         }
+
+        # Add augmentation preset parameters
+        preset_name = self.aug_preset_combo.currentText()
+        from config.settings import Settings
+        preset = Settings.AUGMENTATION_PRESETS.get(preset_name, {})
+        config.update(preset)
+
         self.start_training.emit(config)
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)

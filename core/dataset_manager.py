@@ -95,13 +95,29 @@ class DatasetManager:
         if ratios is None:
             ratios = Settings.DATASET_SPLIT
 
+        # Validate ratios
+        total = ratios.get('train', 0) + ratios.get('val', 0) + ratios.get('test', 0)
+        if abs(total - 1.0) > 0.01:  # Allow small floating point error
+            raise ValueError(f"Split ratios must sum to 1.0, got {total}")
+
+        for split, ratio in ratios.items():
+            if not (0 <= ratio <= 1):
+                raise ValueError(f"Ratio for {split} must be between 0 and 1, got {ratio}")
+
         random.seed(random_seed)
 
         images_dir = self.structure['images']
         labels_dir = self.structure['labels']
 
-        # Get all images
-        images = [f for f in images_dir.iterdir() if self._is_image_file(f)]
+        # Get all images (SORTED for reproducibility)
+        images = sorted([f for f in images_dir.iterdir() if self._is_image_file(f)])
+
+        # Check for empty dataset
+        if not images:
+            raise ValueError("No images found in dataset. Cannot split empty dataset.")
+
+        if len(images) < 3:
+            raise ValueError(f"Need at least 3 images to split, found only {len(images)}")
 
         # Shuffle images
         random.shuffle(images)
