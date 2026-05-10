@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
 from collections import defaultdict
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ModelEvaluator:
@@ -22,19 +25,19 @@ class ModelEvaluator:
         try:
             # Validate file exists
             if not self.model_path.exists():
-                print(f"Error: Model file not found: {self.model_path}")
+                logger.error(f"Model file not found: {self.model_path}")
                 self.model = None
                 return
 
             # Validate file is not empty
             if self.model_path.stat().st_size == 0:
-                print(f"Error: Model file is empty: {self.model_path}")
+                logger.error(f"Model file is empty: {self.model_path}")
                 self.model = None
                 return
 
             # Validate file size is reasonable
             if self.model_path.stat().st_size < 1024:
-                print(f"Error: Model file too small (likely corrupted): {self.model_path}")
+                logger.error(f"Model file too small (likely corrupted): {self.model_path}")
                 self.model = None
                 return
 
@@ -42,9 +45,7 @@ class ModelEvaluator:
             self.model = YOLO(str(self.model_path))
 
         except Exception as e:
-            print(f"Error loading model from {self.model_path}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error loading model from {self.model_path}: {e}")
             self.model = None
 
     def predict_image(self, image_path: Path, conf_threshold: float = 0.25,
@@ -102,7 +103,7 @@ class ModelEvaluator:
             return predictions
 
         except Exception as e:
-            print(f"Error in prediction: {e}")
+            logger.error(f"Error in prediction: {e}")
             return {}
 
     def predict_video(self, video_path: Path, conf_threshold: float = 0.25,
@@ -148,7 +149,7 @@ class ModelEvaluator:
             return stats
 
         except Exception as e:
-            print(f"Error in video prediction: {e}")
+            logger.error(f"Error in video prediction: {e}")
             return {}
 
     def evaluate_dataset(self, data_yaml_path: Path,
@@ -182,7 +183,7 @@ class ModelEvaluator:
             return metrics
 
         except Exception as e:
-            print(f"Error in dataset evaluation: {e}")
+            logger.error(f"Error in dataset evaluation: {e}")
             return {}
 
     def get_confusion_matrix(self, data_yaml_path: Path,
@@ -221,7 +222,7 @@ class ModelEvaluator:
             return pr_curves
 
         except Exception as e:
-            print(f"Error calculating P-R curves: {e}")
+            logger.error(f"Error calculating P-R curves: {e}")
             return {}
 
     def benchmark_speed(self, image_path: Path, iterations: int = 100) -> Dict[str, float]:
@@ -264,7 +265,7 @@ class ModelEvaluator:
             }
 
         except Exception as e:
-            print(f"Error in speed benchmark: {e}")
+            logger.error(f"Error in speed benchmark: {e}")
             return {}
 
     def get_class_performance(self, data_yaml_path: Path,
@@ -297,7 +298,7 @@ class ModelEvaluator:
             return class_metrics
 
         except Exception as e:
-            print(f"Error getting class performance: {e}")
+            logger.error(f"Error getting class performance: {e}")
             return {}
 
     def detect_objects_batch(self, image_paths: List[Path],
@@ -352,7 +353,7 @@ class ModelEvaluator:
             return all_predictions
 
         except Exception as e:
-            print(f"Error in batch prediction: {e}")
+            logger.error(f"Error in batch prediction: {e}")
             return []
 
     def compare_with_ground_truth(self, predictions: Dict[str, Any],

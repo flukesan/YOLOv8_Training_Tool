@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 import yaml
 from config.settings import Settings
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DatasetManager:
@@ -82,7 +85,7 @@ class DatasetManager:
 
             return True
         except Exception as e:
-            print(f"Error importing {source}: {e}")
+            logger.error(f"Error importing {source}: {e}")
             return False
 
     def _is_image_file(self, file_path: Path) -> bool:

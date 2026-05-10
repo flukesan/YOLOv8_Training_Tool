@@ -4,6 +4,9 @@ Label Manager - handles annotation and labeling operations
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Union
 import random
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class Annotation:
@@ -64,7 +67,7 @@ class BoundingBox(Annotation):
         try:
             parts = line.strip().split()
             if len(parts) < 5:
-                print(f"Warning: Invalid label format (need at least 5 values): {line.strip()}")
+                logger.warning(f"Invalid label format (need at least 5 values): {line.strip()}")
                 return None
 
             class_id = int(parts[0])
@@ -76,21 +79,21 @@ class BoundingBox(Annotation):
 
             # Validate ranges
             if not (0 <= x_center <= 1 and 0 <= y_center <= 1):
-                print(f"Warning: Center coordinates out of range [0,1]: x={x_center}, y={y_center}")
+                logger.warning(f"Center coordinates out of range [0,1]: x={x_center}, y={y_center}")
                 return None
 
             if not (0 < width <= 1 and 0 < height <= 1):
-                print(f"Warning: Width/height out of range (0,1]: w={width}, h={height}")
+                logger.warning(f"Width/height out of range (0,1]: w={width}, h={height}")
                 return None
 
             if class_id < 0:
-                print(f"Warning: Negative class ID: {class_id}")
+                logger.warning(f"Negative class ID: {class_id}")
                 return None
 
             return cls(class_id, x_center, y_center, width, height, confidence)
 
         except (ValueError, IndexError) as e:
-            print(f"Warning: Cannot parse label line '{line.strip()}': {e}")
+            logger.warning(f"Cannot parse label line '{line.strip()}': {e}")
             return None
 
     def __repr__(self):
@@ -128,13 +131,13 @@ class Polygon(Annotation):
         try:
             parts = line.strip().split()
             if len(parts) < 7:  # At least class_id + 3 points (x,y pairs)
-                print(f"Warning: Invalid polygon format (need class_id + at least 3 points): {line.strip()}")
+                logger.warning(f"Invalid polygon format (need class_id + at least 3 points): {line.strip()}")
                 return None
 
             class_id = int(parts[0])
 
             if class_id < 0:
-                print(f"Warning: Negative class ID in polygon: {class_id}")
+                logger.warning(f"Negative class ID in polygon: {class_id}")
                 return None
 
             # Parse points
@@ -146,19 +149,19 @@ class Polygon(Annotation):
 
                     # Validate point coordinates
                     if not (0 <= x <= 1 and 0 <= y <= 1):
-                        print(f"Warning: Polygon point out of range [0,1]: ({x}, {y})")
+                        logger.warning(f"Polygon point out of range [0,1]: ({x}, {y})")
                         return None
 
                     points.append((x, y))
 
             if len(points) < 3:  # Need at least 3 points for a polygon
-                print(f"Warning: Polygon has fewer than 3 points: {len(points)}")
+                logger.warning(f"Polygon has fewer than 3 points: {len(points)}")
                 return None
 
             return cls(class_id, points)
 
         except (ValueError, IndexError) as e:
-            print(f"Warning: Cannot parse polygon line '{line.strip()}': {e}")
+            logger.warning(f"Cannot parse polygon line '{line.strip()}': {e}")
             return None
 
     def get_bounding_box(self) -> Tuple[float, float, float, float]:
@@ -381,7 +384,7 @@ class LabelManager:
 
             return annotations
         except Exception as e:
-            print(f"Error in auto-annotation: {e}")
+            logger.error(f"in auto-annotation: {e}")
             return []
 
     def copy_annotations(self, from_image: Path, to_images: List[Path]):

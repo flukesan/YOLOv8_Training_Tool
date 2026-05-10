@@ -4,6 +4,9 @@ Export Manager - handles model export to various formats
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from config.settings import Settings
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ExportManager:
@@ -19,19 +22,19 @@ class ExportManager:
         try:
             # Validate file exists
             if not self.model_path.exists():
-                print(f"Error: Model file not found: {self.model_path}")
+                logger.error(f"Model file not found: {self.model_path}")
                 self.model = None
                 return
 
             # Validate file is not empty
             if self.model_path.stat().st_size == 0:
-                print(f"Error: Model file is empty: {self.model_path}")
+                logger.error(f"Model file is empty: {self.model_path}")
                 self.model = None
                 return
 
             # Validate file size is reasonable (at least 1KB for any valid model)
             if self.model_path.stat().st_size < 1024:
-                print(f"Error: Model file too small (likely corrupted): {self.model_path}")
+                logger.error(f"Model file too small (likely corrupted): {self.model_path}")
                 self.model = None
                 return
 
@@ -39,9 +42,7 @@ class ExportManager:
             self.model = YOLO(str(self.model_path))
 
         except Exception as e:
-            print(f"Error loading model from {self.model_path}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error loading model from {self.model_path}: {e}")
             self.model = None
 
     def export(self, format: str, **kwargs) -> Optional[Path]:
@@ -54,11 +55,11 @@ class ExportManager:
             Path to exported model
         """
         if self.model is None:
-            print("Model not loaded")
+            logger.error("Model not loaded")
             return None
 
         if format not in Settings.EXPORT_FORMATS:
-            print(f"Unsupported export format: {format}")
+            logger.error(f"Unsupported export format: {format}")
             return None
 
         try:
@@ -71,7 +72,7 @@ class ExportManager:
             return None
 
         except Exception as e:
-            print(f"Error exporting to {format}: {e}")
+            logger.error(f"Error exporting to {format}: {e}")
             return None
 
     def export_onnx(self, dynamic: bool = False, simplify: bool = True,
@@ -133,7 +134,7 @@ class ExportManager:
         """
         import platform
         if platform.system() != 'Darwin':
-            print("CoreML export only supported on macOS")
+            logger.warning("CoreML export only supported on macOS")
             return None
 
         return self.export(
@@ -163,7 +164,7 @@ class ExportManager:
         """
         import platform
         if platform.system() != 'Linux':
-            print("TensorRT export only supported on Linux")
+            logger.warning("TensorRT export only supported on Linux")
             return None
 
         return self.export(
@@ -287,7 +288,7 @@ class ExportManager:
             return exported_path.stat().st_size > 0
 
         except Exception as e:
-            print(f"Validation failed: {e}")
+            logger.error(f"Validation failed: {e}")
             return False
 
     def compare_model_sizes(self, formats: List[str]) -> Dict[str, float]:
@@ -319,7 +320,7 @@ class ExportManager:
                 if temp_dir.exists():
                     shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception as e:
-                print(f"Warning: Could not clean up temp directory: {e}")
+                logger.warning(f"Could not clean up temp directory: {e}")
 
         return sizes
 
