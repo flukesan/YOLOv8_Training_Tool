@@ -60,6 +60,7 @@ class Settings:
         'exist_ok': False,
         'save_period': -1,
         'seed': 0,
+        'plots': True,            # Generate result graphs/curves (needed by Results dialog)
         # Removed deprecated parameters: nosave, noval, noautoanchor, noplots,
         # evolve, bucket, image_weights, quad, linear_lr, local_rank, label_smoothing
     }
