@@ -60,7 +60,8 @@ class Settings:
         'exist_ok': False,
         'save_period': -1,
         'seed': 0,
-        'plots': True,            # Generate result graphs/curves (needed by Results dialog)
+        # Note: 'plots' is passed explicitly in model_trainer.train(), so it
+        # must NOT be duplicated here (would raise "multiple values for 'plots'").
         # Removed deprecated parameters: nosave, noval, noautoanchor, noplots,
         # evolve, bucket, image_weights, quad, linear_lr, local_rank, label_smoothing
     }
