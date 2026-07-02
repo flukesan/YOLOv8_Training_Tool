@@ -15,6 +15,15 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# matplotlib chart is optional - guard the import so the dialog still opens
+# if the plotting backend is unavailable.
+try:
+    from ui.widgets.metrics_chart import MetricsChart
+    _CHART_AVAILABLE = True
+except Exception:  # pragma: no cover - depends on matplotlib/Qt backend
+    MetricsChart = None
+    _CHART_AVAILABLE = False
+
 
 class TrainingResultsDialog(QDialog):
     """Dialog for displaying training results"""
@@ -197,7 +206,36 @@ class TrainingResultsDialog(QDialog):
         layout.setSpacing(20)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Graph images
+        # Dynamic chart drawn from results.csv (always renders when the CSV
+        # exists, even if Ultralytics did not save the .png plots).
+        self.results_chart = None
+        if _CHART_AVAILABLE:
+            chart_group = QGroupBox("Metrics Over Epochs (from results.csv)")
+            chart_group.setStyleSheet("""
+                QGroupBox {
+                    font-weight: bold;
+                    font-size: 12px;
+                    color: #212529;
+                    border: 2px solid #cccccc;
+                    border-radius: 5px;
+                    margin-top: 10px;
+                    padding: 15px;
+                    background-color: white;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+                }
+            """)
+            chart_layout = QVBoxLayout()
+            self.results_chart = MetricsChart(dark=False)
+            self.results_chart.setMinimumHeight(500)
+            chart_layout.addWidget(self.results_chart)
+            chart_group.setLayout(chart_layout)
+            layout.addWidget(chart_group)
+
+        # Graph images (Ultralytics-generated plots, shown when available)
         self.graph_labels = {}
 
         graphs = [
@@ -413,8 +451,45 @@ class TrainingResultsDialog(QDialog):
                 # Scroll to the last (most recent) epoch
                 self.metrics_table.scrollToBottom()
 
+                # Feed the dynamic chart from the same CSV rows
+                self._update_results_chart(rows)
+
         except Exception as e:
             logger.error(f"Error loading metrics: {e}", exc_info=True)
+
+    def _update_results_chart(self, rows):
+        """Build a history dict from results.csv rows and draw the chart."""
+        if self.results_chart is None:
+            return
+
+        history = {
+            'train_loss': [],
+            'val_loss': [],
+            'precision': [],
+            'recall': [],
+            'mAP50': [],
+            'mAP50-95': [],
+        }
+        csv_map = {
+            'train_loss': 'train/box_loss',
+            'val_loss': 'val/box_loss',
+            'precision': 'metrics/precision(B)',
+            'recall': 'metrics/recall(B)',
+            'mAP50': 'metrics/mAP50(B)',
+            'mAP50-95': 'metrics/mAP50-95(B)',
+        }
+
+        for row in rows:
+            for key, csv_key in csv_map.items():
+                raw = row.get(csv_key)
+                if raw is None or str(raw).strip() == '':
+                    continue
+                try:
+                    history[key].append(float(raw))
+                except (ValueError, TypeError):
+                    continue
+
+        self.results_chart.update_data(history)
 
     def _find_graph_file(self, key):
         """Locate a graph PNG, falling back to a recursive search.
