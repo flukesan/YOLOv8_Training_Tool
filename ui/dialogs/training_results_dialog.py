@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QGridLayout, QGroupBox, QMessageBox,
                              QTableWidget, QTableWidgetItem, QHeaderView,
                              QAbstractItemView)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QFont
 from pathlib import Path
 import csv
@@ -15,14 +15,61 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# matplotlib chart is optional - guard the import so the dialog still opens
+# matplotlib charts are optional - guard the imports so the dialog still opens
 # if the plotting backend is unavailable.
 try:
     from ui.widgets.metrics_chart import MetricsChart
+    from ui.widgets.validation_charts import ValidationCharts
     _CHART_AVAILABLE = True
 except Exception:  # pragma: no cover - depends on matplotlib/Qt backend
     MetricsChart = None
+    ValidationCharts = None
     _CHART_AVAILABLE = False
+
+
+class _ValidationWorker(QThread):
+    """Runs model.val() off the UI thread and returns the raw plot data."""
+
+    finished_ok = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, weights_path, data_yaml=None, parent=None):
+        super().__init__(parent)
+        self.weights_path = weights_path
+        self.data_yaml = data_yaml
+
+    def run(self):
+        try:
+            from ultralytics import YOLO
+
+            model = YOLO(str(self.weights_path))
+            kwargs = {'verbose': False, 'plots': False}
+            if self.data_yaml:
+                kwargs['data'] = str(self.data_yaml)
+
+            metrics = model.val(**kwargs)
+
+            # Class names (ordered by index)
+            names_attr = getattr(model, 'names', None) or {}
+            if isinstance(names_attr, dict):
+                names = [names_attr[k] for k in sorted(names_attr.keys())]
+            else:
+                names = list(names_attr)
+
+            matrix = None
+            cm = getattr(metrics, 'confusion_matrix', None)
+            if cm is not None:
+                matrix = getattr(cm, 'matrix', None)
+
+            result = {
+                'names': names,
+                'matrix': matrix,
+                'curves': list(getattr(metrics, 'curves', []) or []),
+                'curves_results': list(getattr(metrics, 'curves_results', []) or []),
+            }
+            self.finished_ok.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class TrainingResultsDialog(QDialog):
@@ -234,6 +281,48 @@ class TrainingResultsDialog(QDialog):
             chart_layout.addWidget(self.results_chart)
             chart_group.setLayout(chart_layout)
             layout.addWidget(chart_group)
+
+        # Interactive confusion matrix + curves, generated on demand by
+        # running validation on the trained weights (data not in results.csv).
+        self.validation_charts = None
+        if _CHART_AVAILABLE:
+            val_group = QGroupBox("Confusion Matrix & Curves (interactive)")
+            val_group.setStyleSheet("""
+                QGroupBox {
+                    font-weight: bold;
+                    font-size: 12px;
+                    color: #212529;
+                    border: 2px solid #cccccc;
+                    border-radius: 5px;
+                    margin-top: 10px;
+                    padding: 15px;
+                    background-color: white;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+                }
+            """)
+            val_layout = QVBoxLayout()
+
+            self.btn_generate = QPushButton("🔄  Generate Interactive Charts (run validation)")
+            self.btn_generate.setMinimumHeight(38)
+            self.btn_generate.setStyleSheet(
+                "QPushButton { background-color: #2196F3; color: white; "
+                "border: none; border-radius: 6px; font-weight: 600; }"
+                "QPushButton:hover { background-color: #1e88e5; }"
+                "QPushButton:disabled { background-color: #90caf9; }"
+            )
+            self.btn_generate.clicked.connect(self._on_generate_charts)
+            val_layout.addWidget(self.btn_generate)
+
+            self.validation_charts = ValidationCharts()
+            self.validation_charts.setMinimumHeight(700)
+            val_layout.addWidget(self.validation_charts)
+
+            val_group.setLayout(val_layout)
+            layout.addWidget(val_group)
 
         # Graph images (Ultralytics-generated plots, shown when available)
         self.graph_labels = {}
@@ -566,6 +655,77 @@ class TrainingResultsDialog(QDialog):
             info_text += f"<b>Size:</b> {size_mb:.2f} MB<br>"
 
         self.model_info_label.setText(info_text)
+
+    # -------------------------------------------------- interactive validation
+    def _find_weights(self):
+        """Locate best.pt (preferred) or last.pt for this run."""
+        for name in ('best.pt', 'last.pt'):
+            candidate = self.results_dir / 'weights' / name
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _find_data_yaml(self):
+        """Read the dataset yaml path recorded in args.yaml, if present."""
+        args_yaml = self.results_dir / 'args.yaml'
+        if not args_yaml.exists():
+            return None
+        try:
+            import yaml
+            with open(args_yaml, 'r') as f:
+                args = yaml.safe_load(f) or {}
+            data = args.get('data')
+            if data and Path(data).exists():
+                return Path(data)
+        except Exception as e:
+            logger.warning(f"Could not read data path from args.yaml: {e}")
+        return None
+
+    def _on_generate_charts(self):
+        """Run validation in a background thread and plot the raw results."""
+        if self.validation_charts is None:
+            return
+
+        weights = self._find_weights()
+        if weights is None:
+            QMessageBox.warning(
+                self, "No Weights",
+                "Could not find best.pt or last.pt in this run's weights folder."
+            )
+            return
+
+        data_yaml = self._find_data_yaml()  # may be None -> model uses its own
+
+        self.btn_generate.setEnabled(False)
+        self.btn_generate.setText("Running validation… please wait")
+        self.validation_charts.show_message(
+            "Running validation on the dataset…\nThis may take a moment."
+        )
+
+        self._val_worker = _ValidationWorker(weights, data_yaml, self)
+        self._val_worker.finished_ok.connect(self._on_val_done)
+        self._val_worker.failed.connect(self._on_val_failed)
+        self._val_worker.start()
+
+    def _on_val_done(self, result):
+        self.btn_generate.setEnabled(True)
+        self.btn_generate.setText("🔄  Regenerate Interactive Charts")
+        try:
+            self.validation_charts.plot(
+                result.get('matrix'),
+                result.get('names'),
+                result.get('curves'),
+                result.get('curves_results'),
+            )
+        except Exception as e:
+            logger.error(f"Failed to render validation charts: {e}", exc_info=True)
+            self.validation_charts.show_message(f"Failed to render charts:\n{e}")
+
+    def _on_val_failed(self, msg):
+        self.btn_generate.setEnabled(True)
+        self.btn_generate.setText("🔄  Generate Interactive Charts (run validation)")
+        logger.error(f"Validation run failed: {msg}")
+        self.validation_charts.show_message(f"Validation failed:\n{msg}")
 
     def open_results_folder(self):
         """Open results folder in file explorer"""
