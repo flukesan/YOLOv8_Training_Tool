@@ -5,6 +5,17 @@ opencv-contrib-python>=4.8.0
 Pillow>=10.0.0
 
 # Deep Learning
+# --------------------------------------------------------------------------
+# GPU users: a plain `pip install torch` can resolve to a CPU-only build,
+# which makes torch.cuda.is_available() return False even with an NVIDIA GPU.
+# To use the GPU, install the CUDA build explicitly:
+#
+#   pip uninstall -y torch torchvision
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# (cu124 = CUDA 12.x; use cu118 for older drivers - match your `nvidia-smi`.)
+# Verify with:  python -c "import torch; print(torch.cuda.is_available())"
+# --------------------------------------------------------------------------
 torch>=2.0.0
 torchvision>=0.15.0
 onnx>=1.14.0
