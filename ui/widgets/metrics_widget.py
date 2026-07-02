@@ -7,6 +7,15 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt
 import time
 
+# matplotlib chart is optional - guard the import so the widget still works
+# if the plotting backend is unavailable.
+try:
+    from ui.widgets.metrics_chart import MetricsChart
+    _CHART_AVAILABLE = True
+except Exception:  # pragma: no cover - depends on matplotlib/Qt backend
+    MetricsChart = None
+    _CHART_AVAILABLE = False
+
 
 class MetricCard(QFrame):
     """A card widget for displaying a single metric with label and value"""
@@ -74,6 +83,16 @@ class MetricsWidget(QWidget):
 
     def init_ui(self):
         """Initialize UI"""
+        # Wrap all content in a scroll area so the live chart has room without
+        # pushing the metric cards off-screen on smaller windows.
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+
+        container = QWidget()
         layout = QVBoxLayout()
         layout.setSpacing(8)
 
@@ -160,6 +179,18 @@ class MetricsWidget(QWidget):
         best_group.setLayout(best_layout)
         layout.addWidget(best_group)
 
+        # === Live Charts Section ===
+        self.chart = None
+        if _CHART_AVAILABLE:
+            chart_group = QGroupBox("Live Charts")
+            chart_layout = QVBoxLayout()
+            chart_layout.setContentsMargins(4, 4, 4, 4)
+            self.chart = MetricsChart(dark=True)
+            self.chart.setMinimumHeight(320)
+            chart_layout.addWidget(self.chart)
+            chart_group.setLayout(chart_layout)
+            layout.addWidget(chart_group)
+
         # === Status label ===
         self.status_label = QLabel("Waiting for training to start...")
         self.status_label.setStyleSheet("color: #888; font-size: 11px;")
@@ -167,7 +198,11 @@ class MetricsWidget(QWidget):
         layout.addWidget(self.status_label)
 
         layout.addStretch()
-        self.setLayout(layout)
+
+        container.setLayout(layout)
+        scroll.setWidget(container)
+        outer.addWidget(scroll)
+        self.setLayout(outer)
 
         # Track best values
         self._best_map50 = 0.0
@@ -207,6 +242,10 @@ class MetricsWidget(QWidget):
 
         # Update individual metric cards
         epoch_metrics = metrics.get('metrics', {})
+
+        # Update live charts with the full per-epoch history
+        if self.chart is not None:
+            self.chart.update_data(epoch_metrics)
 
         # Train loss
         train_losses = epoch_metrics.get('train_loss', [])
@@ -299,6 +338,9 @@ class MetricsWidget(QWidget):
 
         self.status_label.setText("Waiting for training to start...")
         self.status_label.setStyleSheet("color: #888; font-size: 11px;")
+
+        if self.chart is not None:
+            self.chart.clear()
 
     @staticmethod
     def _format_time(seconds: float) -> str:
