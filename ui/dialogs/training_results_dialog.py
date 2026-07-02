@@ -3,11 +3,17 @@ Training Results Dialog - Display training results and graphs
 """
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QTabWidget, QWidget, QScrollArea,
-                             QGridLayout, QGroupBox, QMessageBox)
+                             QGridLayout, QGroupBox, QMessageBox,
+                             QTableWidget, QTableWidgetItem, QHeaderView,
+                             QAbstractItemView)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QFont
 from pathlib import Path
 import csv
+
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class TrainingResultsDialog(QDialog):
@@ -228,9 +234,14 @@ class TrainingResultsDialog(QDialog):
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setMinimumHeight(400)
             label.setMaximumHeight(600)
+            # Explicit dark text color so the placeholder message is readable
+            # on the white background (global dark theme would otherwise make it
+            # light text on white = invisible).
             label.setStyleSheet("""
                 border: 1px solid #dee2e6;
                 background-color: white;
+                color: #495057;
+                font-size: 13px;
                 padding: 10px;
             """)
             label.setScaledContents(False)  # Don't stretch, keep aspect ratio
@@ -251,16 +262,11 @@ class TrainingResultsDialog(QDialog):
 
     def init_metrics_tab(self):
         """Initialize metrics tab"""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: #f5f5f5; }")
-
-        content = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        info = QLabel("📊 Detailed Metrics Per Epoch (Last 10 Epochs)")
+        info = QLabel("📊 Detailed Metrics Per Epoch (all epochs)")
         info.setStyleSheet("""
             font-weight: bold;
             font-size: 14px;
@@ -271,27 +277,53 @@ class TrainingResultsDialog(QDialog):
         """)
         layout.addWidget(info)
 
-        self.metrics_text = QLabel("Loading...")
-        self.metrics_text.setWordWrap(True)
-        self.metrics_text.setStyleSheet("""
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            padding: 15px;
-            background-color: white;
-            border: 1px solid #cccccc;
-            border-radius: 5px;
+        # QTableWidget provides native scrollbars and readable cells regardless
+        # of the surrounding dark theme (we style text/background explicitly).
+        self.metrics_table = QTableWidget()
+        self.metrics_table.setColumnCount(6)
+        self.metrics_table.setHorizontalHeaderLabels(
+            ['Epoch', 'mAP@0.5', 'mAP@0.5:0.95', 'Precision', 'Recall', 'Box Loss']
+        )
+        self.metrics_table.verticalHeader().setVisible(False)
+        self.metrics_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.metrics_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.metrics_table.setAlternatingRowColors(True)
+        self.metrics_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.metrics_table.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                alternate-background-color: #f2f6fb;
+                color: #212529;
+                gridline-color: #dee2e6;
+                font-size: 12px;
+                border: 1px solid #cccccc;
+                border-radius: 5px;
+            }
+            QTableWidget::item {
+                color: #212529;
+                padding: 6px 8px;
+            }
+            QTableWidget::item:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            QHeaderView::section {
+                background-color: #e9ecef;
+                color: #212529;
+                font-weight: bold;
+                padding: 8px;
+                border: none;
+                border-right: 1px solid #dee2e6;
+                border-bottom: 1px solid #dee2e6;
+            }
         """)
-        layout.addWidget(self.metrics_text)
+        layout.addWidget(self.metrics_table)
 
-        layout.addStretch()
-
-        content.setLayout(layout)
-        scroll.setWidget(content)
-
-        tab_layout = QVBoxLayout()
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.addWidget(scroll)
-        self.metrics_tab.setLayout(tab_layout)
+        self.metrics_tab.setLayout(layout)
 
     def load_results(self):
         """Load training results"""
@@ -349,15 +381,9 @@ class TrainingResultsDialog(QDialog):
                         except:
                             self.metric_labels[key].setText(value)
 
-                # Load detailed metrics
-                metrics_text = "<pre style='line-height: 1.5;'>"
-                metrics_text += "<b>Epoch\tmAP50\t\tmAP50-95\t\tPrecision\tRecall\t\tLoss</b>\n"
-                metrics_text += "─" * 85 + "\n"
-
-                # Show last 10 epochs
-                display_rows = rows[-10:] if len(rows) >= 10 else rows
-
-                for row in display_rows:
+                # Populate the metrics table with ALL epochs (scrollable)
+                self.metrics_table.setRowCount(0)
+                for row in rows:
                     try:
                         epoch = int(float(row.get('epoch', 0))) + 1
                         map50 = float(row.get('metrics/mAP50(B)', 0))
@@ -365,43 +391,83 @@ class TrainingResultsDialog(QDialog):
                         precision = float(row.get('metrics/precision(B)', 0))
                         recall = float(row.get('metrics/recall(B)', 0))
                         loss = float(row.get('train/box_loss', 0))
-
-                        metrics_text += f"{epoch}\t{map50:.4f}\t\t{map5095:.4f}\t\t\t{precision:.4f}\t\t{recall:.4f}\t\t{loss:.4f}\n"
-                    except:
+                    except (ValueError, TypeError):
                         continue
 
-                metrics_text += "</pre>"
-                self.metrics_text.setText(metrics_text)
+                    values = [
+                        str(epoch),
+                        f"{map50:.4f}",
+                        f"{map5095:.4f}",
+                        f"{precision:.4f}",
+                        f"{recall:.4f}",
+                        f"{loss:.4f}",
+                    ]
+
+                    table_row = self.metrics_table.rowCount()
+                    self.metrics_table.insertRow(table_row)
+                    for col, val in enumerate(values):
+                        item = QTableWidgetItem(val)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.metrics_table.setItem(table_row, col, item)
+
+                # Scroll to the last (most recent) epoch
+                self.metrics_table.scrollToBottom()
 
         except Exception as e:
-            print(f"Error loading metrics: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error loading metrics: {e}", exc_info=True)
+
+    def _find_graph_file(self, key):
+        """Locate a graph PNG, falling back to a recursive search.
+
+        Ultralytics normally writes plots to the top level of the run
+        directory, but depending on version/config they can live in a
+        nested folder. Search recursively so graphs are found either way.
+        """
+        top_level = self.results_dir / f'{key}.png'
+        if top_level.exists():
+            return top_level
+
+        matches = sorted(self.results_dir.rglob(f'{key}.png'))
+        return matches[0] if matches else None
 
     def load_graphs(self):
         """Load graph images"""
-        for key, label in self.graph_labels.items():
-            img_path = self.results_dir / f'{key}.png'
+        found_any = False
 
-            if img_path.exists():
+        for key, label in self.graph_labels.items():
+            img_path = self._find_graph_file(key)
+
+            if img_path is not None:
                 pixmap = QPixmap(str(img_path))
                 if not pixmap.isNull():
-                    # Get label size
-                    label_width = 1100  # Fixed width for consistency
-                    label_height = 500  # Fixed height
-
-                    # Scale pixmap to fit while maintaining aspect ratio
                     scaled_pixmap = pixmap.scaled(
-                        label_width, label_height,
+                        1100, 500,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation
                     )
                     label.setPixmap(scaled_pixmap)
                     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    found_any = True
                 else:
-                    label.setText(f"❌ Failed to load {key}.png")
+                    label.setText(f"⚠️ Failed to load {key}.png (file may be corrupted)")
             else:
-                label.setText(f"❌ {key}.png not found")
+                label.setText(f"⚠️ {key}.png not generated for this run")
+
+        # If nothing was found at all, help diagnose by listing what PNGs
+        # actually exist in the run directory.
+        if not found_any:
+            available = sorted(p.name for p in self.results_dir.rglob('*.png'))
+            if available:
+                logger.warning(
+                    f"No expected graphs found in {self.results_dir}. "
+                    f"Available images: {available}"
+                )
+            else:
+                logger.warning(
+                    f"No .png plots found in {self.results_dir}. "
+                    "Training may have been stopped before plots were generated, "
+                    "or plots=True was disabled."
+                )
 
     def load_model_info(self):
         """Load model information"""
