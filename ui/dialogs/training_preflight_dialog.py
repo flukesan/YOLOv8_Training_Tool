@@ -362,10 +362,20 @@ class TrainingPreflightDialog(QDialog):
             import torch
             if torch.cuda.is_available():
                 gpu_name = torch.cuda.get_device_name(0)
-                mem = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+                # NOTE: attribute is total_memory (not total_mem)
+                mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 self.check_gpu.set_pass(f"{gpu_name} ({mem:.1f} GB)")
             else:
-                self.check_gpu.set_warning("No GPU - will use CPU (slow)")
+                # Distinguish a CPU-only PyTorch build from truly having no GPU.
+                # torch.version.cuda is None when the installed wheel has no
+                # CUDA support, which is the usual reason a real GPU is missed.
+                cuda_build = getattr(getattr(torch, 'version', None), 'cuda', None)
+                if cuda_build is None:
+                    self.check_gpu.set_warning(
+                        "PyTorch is CPU-only build - reinstall with CUDA to use GPU"
+                    )
+                else:
+                    self.check_gpu.set_warning("No GPU detected - will use CPU (slow)")
                 warnings += 1
         except ImportError:
             self.check_gpu.set_warning("PyTorch not found - install required")
