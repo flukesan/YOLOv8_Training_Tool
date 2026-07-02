@@ -40,7 +40,9 @@ class DatasetWidget(QWidget):
         # Image list
         self.image_list = QListWidget()
         self.image_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.image_list.itemClicked.connect(self._on_image_selected)
+        # currentRowChanged fires for both mouse clicks AND keyboard arrows (Up/Down),
+        # so navigating with the keyboard updates the displayed image too.
+        self.image_list.currentRowChanged.connect(self._on_row_changed)
         layout.addWidget(self.image_list)
 
         # Annotation summary for current image
@@ -160,9 +162,8 @@ class DatasetWidget(QWidget):
         else:
             self.pos_label.setText(f"- / {total}")
 
-    def _on_image_selected(self, item):
-        """Handle image selection"""
-        index = self.image_list.row(item)
+    def _on_row_changed(self, index):
+        """Handle image selection via mouse click or keyboard arrows (Up/Down)"""
         if 0 <= index < len(self.images):
             self.image_selected.emit(str(self.images[index]))
             self._update_position()
@@ -171,15 +172,15 @@ class DatasetWidget(QWidget):
         """Navigate to previous image"""
         current = self.image_list.currentRow()
         if current > 0:
+            # setCurrentRow triggers currentRowChanged -> _on_row_changed
             self.image_list.setCurrentRow(current - 1)
-            self._on_image_selected(self.image_list.currentItem())
 
     def _on_next(self):
         """Navigate to next image"""
         current = self.image_list.currentRow()
         if current < self.image_list.count() - 1:
+            # setCurrentRow triggers currentRowChanged -> _on_row_changed
             self.image_list.setCurrentRow(current + 1)
-            self._on_image_selected(self.image_list.currentItem())
 
     def _on_delete(self):
         """Handle delete images"""
