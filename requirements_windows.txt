@@ -5,6 +5,16 @@ opencv-contrib-python>=4.8.0
 Pillow>=10.0.0
 
 # Deep Learning (with pre-built wheels)
+# --------------------------------------------------------------------------
+# IMPORTANT (Windows): the default PyPI torch wheel is CPU-ONLY, so the GPU
+# will NOT be detected. For an NVIDIA GPU, install the CUDA build instead:
+#
+#   pip uninstall -y torch torchvision
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# (cu124 = CUDA 12.x; use cu118 for older drivers - match your `nvidia-smi`.)
+# Verify with:  python -c "import torch; print(torch.cuda.is_available())"
+# --------------------------------------------------------------------------
 torch>=2.0.0
 torchvision>=0.15.0
 
