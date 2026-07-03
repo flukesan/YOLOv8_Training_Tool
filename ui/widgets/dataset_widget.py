@@ -93,8 +93,11 @@ class DatasetWidget(QWidget):
         self.btn_delete.clicked.connect(self._on_delete)
         layout.addWidget(self.btn_delete)
 
-        # Keyboard shortcut
+        # Keyboard shortcut - scoped to this widget so Delete only removes
+        # images when the Dataset panel has focus (avoids clashing with the
+        # annotation list's Delete, which removes the selected annotation).
         self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self._on_delete)
 
         self.setLayout(layout)

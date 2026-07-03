@@ -143,9 +143,9 @@ class MainWindow(QMainWindow):
         self.image_viewer.annotation_updated.connect(self.on_annotation_updated)
 
         # Right panel with tabs
-        right_panel = QTabWidget()
-        right_panel.setMinimumWidth(300)
-        right_panel.setMaximumWidth(380)
+        self.right_panel = QTabWidget()
+        self.right_panel.setMinimumWidth(300)
+        self.right_panel.setMaximumWidth(380)
 
         # Tab 1: Dataset & Classes
         data_tab = QWidget()
@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         data_layout.addWidget(self.dataset_widget)
 
         data_tab.setLayout(data_layout)
-        right_panel.addTab(data_tab, "Dataset")
+        self.right_panel.addTab(data_tab, "Dataset")
 
         # Tab 2: Annotations
         ann_tab = QWidget()
@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
         ann_layout.addWidget(self.label_widget)
 
         ann_tab.setLayout(ann_layout)
-        right_panel.addTab(ann_tab, "Annotations")
+        self.right_panel.addTab(ann_tab, "Annotations")
 
         # Training window (separate floating window)
         self.training_window = TrainingWindow(self)
@@ -196,7 +196,7 @@ class MainWindow(QMainWindow):
         # Splitter: Image viewer (left) | Right panel (right)
         h_splitter = QSplitter(Qt.Orientation.Horizontal)
         h_splitter.addWidget(self.image_viewer)
-        h_splitter.addWidget(right_panel)
+        h_splitter.addWidget(self.right_panel)
         h_splitter.setStretchFactor(0, 3)
         h_splitter.setStretchFactor(1, 1)
 
@@ -540,8 +540,20 @@ class MainWindow(QMainWindow):
         self._update_status(f"Pasted {len(prev_annotations)} annotations from previous image")
 
     def on_annotation_selected_from_viewer(self, index):
-        """Handle annotation selected in ImageViewer → highlight in LabelWidget"""
+        """Annotation selection in ImageViewer -> highlight in LabelWidget and
+        switch the right panel tab: clicking a box opens the Annotations tab
+        (and focuses the list so Delete works), clicking empty space returns
+        to the Dataset tab."""
         self.label_widget.select_annotation(index)
+
+        if index >= 0:
+            # Annotations tab is index 1
+            self.right_panel.setCurrentIndex(1)
+            # Focus the annotation list so the Delete key removes this box
+            self.label_widget.focus_list()
+        else:
+            # Empty click -> back to Dataset tab (index 0)
+            self.right_panel.setCurrentIndex(0)
 
     def on_annotation_selected_from_list(self, index):
         """Handle annotation selected in LabelWidget → highlight in ImageViewer"""
