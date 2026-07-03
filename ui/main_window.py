@@ -141,6 +141,7 @@ class MainWindow(QMainWindow):
         self.image_viewer.polygon_added.connect(self.on_polygon_added)
         self.image_viewer.annotation_selected.connect(self.on_annotation_selected_from_viewer)
         self.image_viewer.annotation_updated.connect(self.on_annotation_updated)
+        self.image_viewer.annotation_delete_requested.connect(self.on_delete_annotation)
 
         # Right panel with tabs
         self.right_panel = QTabWidget()
@@ -547,10 +548,11 @@ class MainWindow(QMainWindow):
         self.label_widget.select_annotation(index)
 
         if index >= 0:
-            # Annotations tab is index 1
+            # Annotations tab is index 1 (visual feedback of the selection)
             self.right_panel.setCurrentIndex(1)
-            # Focus the annotation list so the Delete key removes this box
-            self.label_widget.focus_list()
+            # Keep keyboard focus on the image so arrow keys nudge the box and
+            # Delete removes it (both handled by the image viewer).
+            self.image_viewer.setFocus()
         else:
             # Empty click -> back to Dataset tab (index 0)
             self.right_panel.setCurrentIndex(0)
