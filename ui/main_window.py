@@ -878,7 +878,15 @@ class MainWindow(QMainWindow):
                 other_formats = [f for f in formats if f != 'pt']
                 if other_formats:
                     export_mgr = ExportManager(best_weights)
-                    results.update(export_mgr.export_multiple(other_formats))
+                    # export_multiple returns {format: Path|None}; normalise it
+                    # to the same {'success', 'path'} shape used for 'pt' so the
+                    # summary below can treat every entry uniformly.
+                    for fmt, path in export_mgr.export_multiple(other_formats).items():
+                        if path is not None:
+                            results[fmt] = {'success': True, 'path': str(path)}
+                        else:
+                            results[fmt] = {'success': False,
+                                            'error': 'Export produced no file'}
 
                 success_count = sum(1 for r in results.values() if r.get('success'))
                 failed_count = len(results) - success_count
