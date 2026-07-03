@@ -4,7 +4,8 @@ Label Widget - annotation tools panel with modern UI
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QListWidget, QListWidgetItem,
                              QPushButton, QLabel, QHBoxLayout)
 from PyQt6.QtCore import pyqtSignal, Qt
-from PyQt6.QtGui import QColor, QBrush, QIcon, QPixmap, QPainter
+from PyQt6.QtGui import (QColor, QBrush, QIcon, QPixmap, QPainter,
+                         QShortcut, QKeySequence)
 
 
 class LabelWidget(QWidget):
@@ -77,6 +78,17 @@ class LabelWidget(QWidget):
 
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+
+        # Delete key removes the selected annotation. Scope it to this widget
+        # (WidgetWithChildrenShortcut) so it doesn't clash with the Dataset
+        # panel's Delete shortcut (which deletes images).
+        self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.delete_shortcut.activated.connect(self._on_delete)
+
+    def focus_list(self):
+        """Give the annotation list keyboard focus (so Delete works)."""
+        self.annotation_list.setFocus()
 
     def set_classes(self, class_names, class_colors):
         """Set class info for display"""
