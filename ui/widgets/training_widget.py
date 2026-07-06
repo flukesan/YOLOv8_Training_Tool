@@ -148,7 +148,7 @@ class TrainingWidget(QWidget):
         # Epochs
         default_params = Settings.DEFAULT_TRAIN_PARAMS
         self.epochs_spin = QSpinBox()
-        self.epochs_spin.setRange(1, 1000)
+        self.epochs_spin.setRange(1, 4000)
         self.epochs_spin.setValue(default_params.get('epochs', 100))
         self.epochs_spin.setToolTip(
             "Number of training epochs.\n"
