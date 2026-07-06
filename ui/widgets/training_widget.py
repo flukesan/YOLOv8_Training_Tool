@@ -263,6 +263,19 @@ class TrainingWidget(QWidget):
         )
         strategy_section.add_row("", self.cos_lr_check)
 
+        # Close mosaic (disable mosaic augmentation for the final N epochs)
+        self.close_mosaic_spin = QSpinBox()
+        self.close_mosaic_spin.setRange(0, 100)
+        self.close_mosaic_spin.setValue(default_params.get('close_mosaic', 10))
+        self.close_mosaic_spin.setSpecialValueText("Disabled (0)")
+        self.close_mosaic_spin.setToolTip(
+            "Disable mosaic augmentation for the last N epochs.\n"
+            "Lets the model train on real (un-mosaicked) images near the\n"
+            "end, which smooths the loss tail and usually improves final\n"
+            "accuracy. Default 10. Set to 0 to keep mosaic on the whole time."
+        )
+        strategy_section.add_row("Close Mosaic (last N):", self.close_mosaic_spin)
+
         # Add the strategy section to the layout
         layout.addWidget(strategy_section)
 
@@ -503,6 +516,7 @@ class TrainingWidget(QWidget):
             'optimizer': self.optimizer_combo.currentData(),
             'patience': self.patience_spin.value(),
             'cos_lr': self.cos_lr_check.isChecked(),
+            'close_mosaic': self.close_mosaic_spin.value(),
             'amp': self.amp_check.isChecked(),
             'multi_scale': self.multiscale_check.isChecked(),
             'workers': self.workers_spin.value(),
@@ -561,6 +575,8 @@ class TrainingWidget(QWidget):
             self.patience_spin.setValue(config['patience'])
         if 'cos_lr' in config:
             self.cos_lr_check.setChecked(config['cos_lr'])
+        if 'close_mosaic' in config:
+            self.close_mosaic_spin.setValue(config['close_mosaic'])
         if 'amp' in config:
             self.amp_check.setChecked(config['amp'])
         if 'multi_scale' in config:
