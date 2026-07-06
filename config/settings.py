@@ -44,6 +44,7 @@ class Settings:
         'warmup_bias_lr': 0.1,
         'optimizer': 'SGD',
         'cos_lr': False,
+        'close_mosaic': 10,       # Disable mosaic aug for the last N epochs (smoother tail)
         'amp': True,
         'fraction': 1.0,
         'profile': False,
@@ -203,8 +204,8 @@ class Settings:
     # Keys that should be persisted in training config
     TRAINING_CONFIG_KEYS = [
         'model', 'epochs', 'batch', 'imgsz', 'lr0', 'optimizer',
-        'patience', 'cos_lr', 'amp', 'multi_scale', 'workers', 'seed',
-        'device', 'cache', 'freeze',
+        'patience', 'cos_lr', 'close_mosaic', 'amp', 'multi_scale',
+        'workers', 'seed', 'device', 'cache', 'freeze',
     ]
 
     @classmethod
