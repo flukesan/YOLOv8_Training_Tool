@@ -52,6 +52,12 @@ class TrainingSession:
         return end - self.start_time
 
 
+class TrainingStopped(Exception):
+    """Internal signal raised from a training callback to abort promptly
+    when the user requests a stop."""
+    pass
+
+
 class ModelTrainer:
     """Handles YOLO model training"""
 
@@ -262,19 +268,23 @@ class ModelTrainer:
             # Load model
             model = YOLO(model_path)
 
-            # Add custom callbacks to YOLO trainer
+            # ── Control: honour pause/stop across the whole run ──────────
+            def _check_control(trainer=None):
+                """Block while paused; abort promptly when Stop is requested.
+
+                Registered on several Ultralytics events (including early
+                ones) so a Stop press is acted on during initialization and
+                within an epoch, not only at epoch boundaries."""
+                while self.pause_flag.is_set() and not self.stop_flag.is_set():
+                    time.sleep(0.3)
+                if self.stop_flag.is_set():
+                    if trainer is not None:
+                        trainer.stop = True          # graceful signal to YOLO
+                    raise TrainingStopped()          # immediate abort
+
             def on_train_epoch_end(trainer):
                 """Called at end of each training epoch"""
-                if self.stop_flag.is_set():
-                    trainer.stop = True
-                    return
-
-                # Handle pause
-                while self.pause_flag.is_set():
-                    time.sleep(0.5)
-                    if self.stop_flag.is_set():
-                        trainer.stop = True
-                        return
+                _check_control(trainer)
 
                 # Extract metrics
                 metrics = {}
@@ -299,7 +309,12 @@ class ModelTrainer:
 
                 self._trigger_callbacks('on_epoch_end', self.current_session, metrics)
 
-            # Register callback with YOLO model
+            # Register callbacks. The early events let a Stop pressed during
+            # setup take effect as soon as possible; on_train_batch_end makes
+            # stopping responsive within a long epoch.
+            model.add_callback('on_pretrain_routine_end', lambda t: _check_control(t))
+            model.add_callback('on_train_start', lambda t: _check_control(t))
+            model.add_callback('on_train_batch_end', lambda t: _check_control(t))
             model.add_callback('on_train_epoch_end', on_train_epoch_end)
 
             # Train model (use train_kwargs which has 'model' removed)
@@ -318,6 +333,13 @@ class ModelTrainer:
                 self.current_session.best_metrics = results.results_dict
 
             self._trigger_callbacks('on_train_end', self.current_session, results)
+
+        except TrainingStopped:
+            # User pressed Stop - end cleanly instead of reporting an error
+            self.current_session.status = 'stopped'
+            self.current_session.end_time = time.time()
+            logger.info("Training stopped by user request")
+            self._trigger_callbacks('on_train_end', self.current_session, None)
 
         except Exception as e:
             self.current_session.status = 'failed'
