@@ -362,6 +362,27 @@ class MainWindow(QMainWindow):
         help_menu = menubar.addMenu("Help")
         help_menu.addAction("About", self.show_about)
 
+    def _reset_project_state(self):
+        """Clear all in-memory data and UI widgets so a project starts clean.
+
+        Without this, creating/opening a project leaves the previous
+        project's classes, images and annotations visible."""
+        self.current_image = None
+        self.previous_image = None
+        self.classes = []
+
+        # Reset the right-panel widgets
+        self.class_manager.set_classes([])
+        self.dataset_widget.set_images([])
+        self.dataset_widget.set_classes([], {})
+        self.dataset_widget.update_annotation_summary([])
+        self.label_widget.update_annotations([])
+        self.label_widget.set_classes([], {})
+
+        # Reset the image canvas
+        self.image_viewer.set_classes([], {})
+        self.image_viewer.clear_image()
+
     def new_project(self):
         """Create new project"""
         dialog = NewProjectDialog(self)
@@ -372,6 +393,8 @@ class MainWindow(QMainWindow):
             self.dataset_manager = DatasetManager(self.project_path)
             self.label_manager = LabelManager(self.project_path)
             self.model_trainer = ModelTrainer(self.project_path)
+            # Clear any leftover data/UI from the previous project
+            self._reset_project_state()
             self.project_label.setText(f"Project: {info['name']}")
             self.project_label.setStyleSheet(
                 "color: #4CAF50; font-size: 13px; font-weight: 500; "
@@ -388,6 +411,8 @@ class MainWindow(QMainWindow):
             self.dataset_manager = DatasetManager(self.project_path)
             self.label_manager = LabelManager(self.project_path)
             self.model_trainer = ModelTrainer(self.project_path)
+            # Clear leftover data/UI from the previous project before loading
+            self._reset_project_state()
             self.project_label.setText(f"Project: {self.project_path.name}")
             self.project_label.setStyleSheet(
                 "color: #4CAF50; font-size: 13px; font-weight: 500; "
