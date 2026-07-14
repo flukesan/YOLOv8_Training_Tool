@@ -30,43 +30,87 @@ def detect_format(source_dir: Path) -> Optional[str]:
     return None
 
 
+def _candidate_roots(source_dir: Path) -> List[Path]:
+    """The selected folder plus up to two parent levels - so pointing at an
+    images-only subfolder (e.g. FiftyOne's train/data or images/val) still
+    finds the sibling labels.json / dataset.yaml higher up."""
+    source_dir = Path(source_dir)
+    roots = [source_dir]
+    current = source_dir
+    for _ in range(2):
+        parent = current.parent
+        if parent == current:
+            break
+        roots.append(parent)
+        current = parent
+    return roots
+
+
+_COCO_NAME_HINTS = ('labels', 'instances', 'annotation', 'coco')
+
+
+def _looks_like_coco(path: Path) -> bool:
+    """True if the json looks like COCO. Reads a generous head so the check
+    survives large files where 'annotations' sits far past the image list."""
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            head = f.read(262144)  # 256KB - categories/images appear early
+    except OSError:
+        return False
+    if '"images"' not in head:
+        return False
+    return ('"annotations"' in head or '"categories"' in head
+            or '"info"' in head)
+
+
+def _prioritise_json(paths: List[Path]) -> List[Path]:
+    """Sort likely-COCO filenames first (labels.json, instances_*.json, ...)."""
+    def key(p: Path):
+        name = p.name.lower()
+        return (0 if any(h in name for h in _COCO_NAME_HINTS) else 1, str(p))
+    return sorted(paths, key=key)
+
+
 def _find_coco_json(source_dir: Path) -> Optional[Path]:
-    """Find a COCO annotations json (has images/annotations/categories keys)."""
-    candidates = sorted(source_dir.rglob('*.json'))
-    for path in candidates[:20]:  # avoid scanning huge trees exhaustively
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                head = f.read(4096)
-            # Cheap check before full parse
-            if '"images"' in head and '"annotations"' in head:
+    """Find a COCO annotations json in the folder or its parent."""
+    roots = _candidate_roots(source_dir)
+    # Top-level first (fast: avoids walking huge image trees)
+    for root in roots:
+        for path in _prioritise_json(list(root.glob('*.json'))):
+            if _looks_like_coco(path):
                 return path
-        except OSError:
-            continue
+    # Then a bounded recursive search
+    for root in roots:
+        for path in _prioritise_json(list(root.rglob('*.json'))[:100]):
+            if _looks_like_coco(path):
+                return path
     return None
 
 
 def _find_yolo_yaml(source_dir: Path) -> Optional[Path]:
     """Find dataset.yaml/data.yaml (or any yaml with a 'names' key)."""
-    named = [source_dir / 'dataset.yaml', source_dir / 'data.yaml']
-    others = sorted(source_dir.glob('*.yaml')) + sorted(source_dir.glob('*.yml'))
-    for path in named + others:
-        if not path.exists():
-            continue
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            if isinstance(data, dict) and 'names' in data:
-                return path
-        except (OSError, yaml.YAMLError):
-            continue
+    for root in _candidate_roots(source_dir):
+        named = [root / 'dataset.yaml', root / 'data.yaml']
+        others = sorted(root.glob('*.yaml')) + sorted(root.glob('*.yml'))
+        for path in named + others:
+            if not path.exists():
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                if isinstance(data, dict) and 'names' in data:
+                    return path
+            except (OSError, yaml.YAMLError):
+                continue
     return None
 
 
 def _find_labels_dir(source_dir: Path) -> Optional[Path]:
     """Find a labels/ directory containing .txt files."""
-    for candidate in sorted(source_dir.rglob('labels')):
-        if candidate.is_dir() and any(candidate.rglob('*.txt')):
-            return candidate
+    for root in _candidate_roots(source_dir):
+        for candidate in sorted(root.rglob('labels')):
+            if candidate.is_dir() and any(candidate.rglob('*.txt')):
+                return candidate
     return None
 
 
@@ -119,13 +163,26 @@ class DatasetImporter:
             'annotation_count': len(data.get('annotations', [])),
         }
 
+    @staticmethod
+    def _yolo_root(source_dir: Path) -> Path:
+        """Folder to collect image/label pairs from - the one holding
+        dataset.yaml or the labels/ dir, so selecting an images-only
+        subfolder still works."""
+        yaml_path = _find_yolo_yaml(source_dir)
+        if yaml_path:
+            return yaml_path.parent
+        labels = _find_labels_dir(source_dir)
+        if labels:
+            return labels.parent
+        return Path(source_dir)
+
     def _scan_yolo(self, source_dir: Path) -> Dict:
         yaml_path = _find_yolo_yaml(source_dir)
         classes: List[str] = []
         if yaml_path:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 classes = _yaml_names_to_list(yaml.safe_load(f).get('names'))
-        pairs = self._collect_yolo_pairs(source_dir)
+        pairs = self._collect_yolo_pairs(self._yolo_root(source_dir))
         ann_count = sum(1 for _, lbl in pairs if lbl is not None)
         if not classes:
             # Derive class ids from the label files themselves
@@ -320,7 +377,7 @@ class DatasetImporter:
 
     def _iter_yolo_items(self, source_dir: Path, mapping: Dict[int, int]):
         """Yield (image_path, [remapped yolo label lines]) from a YOLO tree."""
-        for img, label in self._collect_yolo_pairs(source_dir):
+        for img, label in self._collect_yolo_pairs(self._yolo_root(source_dir)):
             lines = []
             if label is not None:
                 try:
