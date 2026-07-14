@@ -344,6 +344,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Save", self.save_project)
         file_menu.addSeparator()
         file_menu.addAction("Import Images", self.import_images)
+        file_menu.addAction("Import Dataset (COCO/YOLO)...", self.import_dataset)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
 
@@ -448,6 +449,64 @@ class MainWindow(QMainWindow):
             )
             self.refresh_dataset()
             self._update_workflow_steps()
+
+    def import_dataset(self):
+        """Import an external COCO/YOLO dataset (e.g. a FiftyOne export)"""
+        if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning",
+                                "Please create or open a project first")
+            return
+
+        from ui.dialogs.import_dataset_dialog import ImportDatasetDialog
+        from core.dataset_importer import DatasetImporter
+
+        dialog = ImportDatasetDialog(self.project_path, self.classes, self)
+        if dialog.exec() != ImportDatasetDialog.DialogCode.Accepted:
+            return
+
+        cfg = dialog.get_import_config()
+        self._update_status("Importing dataset...")
+        try:
+            importer = DatasetImporter(self.project_path, self.classes)
+            stats = importer.import_dataset(
+                cfg['source_dir'],
+                fmt=cfg['format'],
+                selected_classes=cfg['selected_classes'],
+                filename_prefix=cfg['filename_prefix'],
+                include_unlabeled=cfg['include_unlabeled'],
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Import Failed",
+                                 f"Failed to import dataset:\n{e}")
+            self._update_status("Dataset import failed")
+            return
+
+        # Adopt the merged class list (existing indices preserved, new
+        # classes appended) and propagate to all widgets + config.yaml.
+        self.classes = stats['classes']
+        self.class_manager.set_classes(self.classes)
+        if self.label_manager:
+            self.label_manager.set_classes(self.classes)
+            self.image_viewer.set_classes(self.classes,
+                                          self.label_manager.class_colors)
+            self.label_widget.set_classes(self.classes,
+                                          self.label_manager.class_colors)
+            self.dataset_widget.set_classes(self.classes,
+                                            self.label_manager.class_colors)
+        self.save_classes_to_config()
+
+        self.refresh_dataset()
+        self._update_workflow_steps()
+        self._update_status("Dataset import complete")
+
+        QMessageBox.information(
+            self, "Import Complete",
+            f"Images imported: {stats['imported']}\n"
+            f"Annotations: {stats['annotations']}\n"
+            f"Skipped (no annotations): {stats['skipped']}\n"
+            f"Errors: {stats['errors']}\n\n"
+            f"Project classes: {', '.join(self.classes)}"
+        )
 
     def load_image(self, image_path: str):
         """Load image in viewer"""
