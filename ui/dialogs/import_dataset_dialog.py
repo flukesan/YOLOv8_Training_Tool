@@ -133,7 +133,10 @@ class ImportDatasetDialog(QDialog):
         fmt = detect_format(source_dir)
         if fmt is None:
             self.summary_label.setText(
-                "❌ Not recognised: no COCO .json or YOLO dataset found")
+                "❌ Not recognised. Select the folder that contains "
+                "labels.json (COCO) or dataset.yaml / a labels folder (YOLO) "
+                "- not the images-only subfolder.")
+            self.summary_label.setWordWrap(True)
             self.summary_label.setStyleSheet("color: #e74c3c; font-size: 12px;")
             return
 
