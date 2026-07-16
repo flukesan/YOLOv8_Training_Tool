@@ -4,7 +4,8 @@ Training Widget - Enhanced training controls with better usability
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QSpinBox, QDoubleSpinBox, QFormLayout,
                              QGroupBox, QComboBox, QProgressBar, QCheckBox,
-                             QScrollArea, QFrame, QToolButton, QSizePolicy)
+                             QScrollArea, QFrame, QToolButton, QSizePolicy,
+                             QMessageBox)
 from PyQt6.QtCore import pyqtSignal, Qt
 from config.settings import Settings
 
@@ -93,6 +94,25 @@ class TrainingWidget(QWidget):
         title = QLabel("Training Configuration")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
+
+        # === High Accuracy preset (one-click recommended settings) ===
+        self.btn_high_accuracy = QPushButton("⚡  High Accuracy Preset")
+        self.btn_high_accuracy.setToolTip(
+            "Apply a curated set of settings tuned for high accuracy and a\n"
+            "smooth, steadily decreasing loss curve:\n"
+            "  • YOLOv8m model, SGD + cosine LR\n"
+            "  • close_mosaic=15 (real images near the end)\n"
+            "  • patience=100, 300 epochs, medium augmentation\n"
+            "You can still fine-tune any value afterwards."
+        )
+        self.btn_high_accuracy.setStyleSheet(
+            "QPushButton { background-color: #6a4dc0; color: #ffffff; "
+            "border: none; border-radius: 6px; padding: 8px 14px; "
+            "font-weight: 600; }"
+            "QPushButton:hover { background-color: #7b5fd4; }"
+        )
+        self.btn_high_accuracy.clicked.connect(self._apply_high_accuracy_preset)
+        layout.addWidget(self.btn_high_accuracy)
 
         # === Device Info Banner ===
         self._create_device_banner(layout)
@@ -504,6 +524,50 @@ class TrainingWidget(QWidget):
             self.status_label.setText("Training paused")
             self.status_label.setStyleSheet("color: #FF9800;")
             self._is_paused = True
+
+    @staticmethod
+    def _select_combo_by_data(combo, data):
+        """Select the combo entry whose userData equals `data` (no-op if absent)."""
+        for i in range(combo.count()):
+            if combo.itemData(i) == data:
+                combo.setCurrentIndex(i)
+                return True
+        return False
+
+    def _apply_high_accuracy_preset(self):
+        """Set a curated configuration tuned for accuracy + smooth loss."""
+        # Model / input
+        self._select_combo_by_data(self.model_combo,
+                                   Settings.YOLO_MODELS.get('YOLOv8m'))
+        self._select_combo_by_data(self.imgsz_combo, 640)
+
+        # Schedule
+        self.epochs_spin.setValue(300)
+        self.patience_spin.setValue(100)
+        self._select_combo_by_data(self.optimizer_combo, 'SGD')
+        self.lr_spin.setValue(0.01)
+        self.cos_lr_check.setChecked(True)
+        self.close_mosaic_spin.setValue(15)
+        self.amp_check.setChecked(True)
+
+        # Balanced augmentation - strong enough to generalise, calm enough
+        # to keep the loss curve smooth.
+        self._select_combo_by_data(self.aug_combo, 'medium')
+
+        QMessageBox.information(
+            self, "High Accuracy Preset Applied",
+            "Applied recommended settings:\n\n"
+            "• Model: YOLOv8m\n"
+            "• Optimizer: SGD + Cosine LR\n"
+            "• Epochs: 300, Patience: 100\n"
+            "• Close Mosaic: 15 (smoother loss tail)\n"
+            "• Augmentation: Medium, AMP: on\n\n"
+            "Tips to reach mAP 95%+ / Recall 90%+:\n"
+            "• 300-500+ well-labelled images per class\n"
+            "• Annotate EVERY object (missed labels hurt recall)\n"
+            "• Balance the number of images across classes\n"
+            "• If small objects are missed, raise Image Size to 960"
+        )
 
     def get_training_config(self) -> dict:
         """Collect all training configuration into a dictionary"""
