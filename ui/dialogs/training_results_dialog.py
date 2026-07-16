@@ -61,11 +61,31 @@ class _ValidationWorker(QThread):
             if cm is not None:
                 matrix = getattr(cm, 'matrix', None)
 
+            # Per-class precision / recall / mAP (from metrics.box)
+            per_class = []
+            box = getattr(metrics, 'box', None)
+            if box is not None and hasattr(box, 'ap_class_index'):
+                for i, c in enumerate(box.ap_class_index):
+                    try:
+                        p, r, ap50, ap = box.class_result(i)
+                    except Exception:
+                        continue
+                    c = int(c)
+                    cname = names[c] if c < len(names) else f"class_{c}"
+                    per_class.append({
+                        'class': cname,
+                        'precision': float(p),
+                        'recall': float(r),
+                        'mAP50': float(ap50),
+                        'mAP50-95': float(ap),
+                    })
+
             result = {
                 'names': names,
                 'matrix': matrix,
                 'curves': list(getattr(metrics, 'curves', []) or []),
                 'curves_results': list(getattr(metrics, 'curves_results', []) or []),
+                'per_class': per_class,
             }
             self.finished_ok.emit(result)
         except Exception as e:
@@ -316,6 +336,32 @@ class TrainingResultsDialog(QDialog):
             )
             self.btn_generate.clicked.connect(self._on_generate_charts)
             val_layout.addWidget(self.btn_generate)
+
+            # Per-class metrics table (populated after validation runs)
+            self.per_class_table = QTableWidget()
+            self.per_class_table.setColumnCount(5)
+            self.per_class_table.setHorizontalHeaderLabels(
+                ['Class', 'Precision', 'Recall', 'mAP@50', 'mAP@50-95'])
+            self.per_class_table.verticalHeader().setVisible(False)
+            self.per_class_table.setEditTriggers(
+                QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.per_class_table.horizontalHeader().setSectionResizeMode(
+                QHeaderView.ResizeMode.Stretch)
+            self.per_class_table.setMaximumHeight(220)
+            self.per_class_table.setStyleSheet("""
+                QTableWidget { background-color: white; color: #212529;
+                    gridline-color: #dee2e6; font-size: 12px;
+                    border: 1px solid #cccccc; border-radius: 5px; }
+                QTableWidget::item { color: #212529; padding: 5px 8px; }
+                QHeaderView::section { background-color: #e9ecef; color: #212529;
+                    font-weight: bold; padding: 6px; border: none;
+                    border-right: 1px solid #dee2e6; }
+            """)
+            self.per_class_table.setVisible(False)
+            val_layout.addWidget(QLabel(
+                "<b>Per-class metrics</b> "
+                "<span style='color:#8891a0;'>(recall &lt; 0.90 highlighted)</span>"))
+            val_layout.addWidget(self.per_class_table)
 
             self.validation_charts = ValidationCharts()
             self.validation_charts.setMinimumHeight(700)
@@ -710,6 +756,7 @@ class TrainingResultsDialog(QDialog):
     def _on_val_done(self, result):
         self.btn_generate.setEnabled(True)
         self.btn_generate.setText("🔄  Regenerate Interactive Charts")
+        self._populate_per_class_table(result.get('per_class') or [])
         try:
             self.validation_charts.plot(
                 result.get('matrix'),
@@ -720,6 +767,37 @@ class TrainingResultsDialog(QDialog):
         except Exception as e:
             logger.error(f"Failed to render validation charts: {e}", exc_info=True)
             self.validation_charts.show_message(f"Failed to render charts:\n{e}")
+
+    def _populate_per_class_table(self, per_class):
+        """Fill the per-class table; flag rows whose recall is below 0.90."""
+        from PyQt6.QtGui import QColor
+
+        table = self.per_class_table
+        table.setRowCount(0)
+        if not per_class:
+            table.setVisible(False)
+            return
+
+        for row in per_class:
+            r = table.rowCount()
+            table.insertRow(r)
+            low_recall = row['recall'] < 0.90
+            values = [
+                row['class'],
+                f"{row['precision']:.3f}",
+                f"{row['recall']:.3f}",
+                f"{row['mAP50']:.3f}",
+                f"{row['mAP50-95']:.3f}",
+            ]
+            for col, val in enumerate(values):
+                item = QTableWidgetItem(val)
+                if col > 0:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Highlight the recall cell (and row) when recall is low
+                if low_recall:
+                    item.setForeground(QColor('#c0392b'))
+                table.setItem(r, col, item)
+        table.setVisible(True)
 
     def _on_val_failed(self, msg):
         self.btn_generate.setEnabled(True)
