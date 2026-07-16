@@ -96,7 +96,7 @@ class TrainingWidget(QWidget):
         layout.addWidget(title)
 
         # === High Accuracy preset (one-click recommended settings) ===
-        self.btn_high_accuracy = QPushButton("⚡  High Accuracy Preset")
+        self.btn_high_accuracy = QPushButton("High Accuracy Preset")
         self.btn_high_accuracy.setToolTip(
             "Apply a curated set of settings tuned for high accuracy and a\n"
             "smooth, steadily decreasing loss curve:\n"
@@ -106,10 +106,7 @@ class TrainingWidget(QWidget):
             "You can still fine-tune any value afterwards."
         )
         self.btn_high_accuracy.setStyleSheet(
-            "QPushButton { background-color: #6a4dc0; color: #ffffff; "
-            "border: none; border-radius: 6px; padding: 8px 14px; "
-            "font-weight: 600; }"
-            "QPushButton:hover { background-color: #7b5fd4; }"
+            "QPushButton { padding: 8px 14px; border-radius: 8px; }"
         )
         self.btn_high_accuracy.clicked.connect(self._apply_high_accuracy_preset)
         layout.addWidget(self.btn_high_accuracy)
