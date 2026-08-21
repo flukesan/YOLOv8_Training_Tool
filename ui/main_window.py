@@ -349,6 +349,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Exit", self.close)
 
         dataset_menu = menubar.addMenu("Dataset")
+        dataset_menu.addAction("Auto-Annotate (Zero-Shot)...", self.open_auto_annotate)
         dataset_menu.addAction("Split Dataset", self.split_dataset)
         dataset_menu.addAction("Statistics", self.show_statistics)
 
@@ -483,17 +484,7 @@ class MainWindow(QMainWindow):
 
         # Adopt the merged class list (existing indices preserved, new
         # classes appended) and propagate to all widgets + config.yaml.
-        self.classes = stats['classes']
-        self.class_manager.set_classes(self.classes)
-        if self.label_manager:
-            self.label_manager.set_classes(self.classes)
-            self.image_viewer.set_classes(self.classes,
-                                          self.label_manager.class_colors)
-            self.label_widget.set_classes(self.classes,
-                                          self.label_manager.class_colors)
-            self.dataset_widget.set_classes(self.classes,
-                                            self.label_manager.class_colors)
-        self.save_classes_to_config()
+        self._adopt_merged_classes(stats['classes'])
 
         self.refresh_dataset()
         self._update_workflow_steps()
@@ -507,6 +498,43 @@ class MainWindow(QMainWindow):
             f"Errors: {stats['errors']}\n\n"
             f"Project classes: {', '.join(self.classes)}"
         )
+
+    def _adopt_merged_classes(self, merged_classes):
+        """Apply a merged class list (existing indices preserved, new
+        classes appended) to every widget that displays classes, and
+        persist it to config.yaml. Shared by the COCO/YOLO importer and
+        the Auto-Annotate (Zero-Shot) hand-off."""
+        self.classes = merged_classes
+        self.class_manager.set_classes(self.classes)
+        if self.label_manager:
+            self.label_manager.set_classes(self.classes)
+            self.image_viewer.set_classes(self.classes,
+                                          self.label_manager.class_colors)
+            self.label_widget.set_classes(self.classes,
+                                          self.label_manager.class_colors)
+            self.dataset_widget.set_classes(self.classes,
+                                            self.label_manager.class_colors)
+        self.save_classes_to_config()
+
+    def open_auto_annotate(self):
+        """Open the zero-shot Auto-Annotate (Grounding DINO) dialog"""
+        if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning",
+                                "Please create or open a project first")
+            return
+
+        from ui.dialogs.auto_annotate_dialog import AutoAnnotateDialog
+
+        dialog = AutoAnnotateDialog(self.project_path, self.classes, self)
+        dialog.dataset_imported.connect(self._on_auto_annotate_imported)
+        dialog.exec()
+
+    def _on_auto_annotate_imported(self, merged_classes):
+        """Handle a successful hand-off from the Auto-Annotate dialog"""
+        self._adopt_merged_classes(merged_classes)
+        self.refresh_dataset()
+        self._update_workflow_steps()
+        self._update_status("Auto-annotated dataset imported")
 
     def load_image(self, image_path: str):
         """Load image in viewer"""
