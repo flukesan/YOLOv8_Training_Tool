@@ -167,6 +167,10 @@ class DatasetWidget(QWidget):
             if self.image_list.count() > 0:
                 row = min(row, self.image_list.count() - 1)
                 self.image_list.setCurrentRow(row)
+                # Move keyboard focus onto the list itself (it was on the
+                # Delete button that triggered this) so Up/Down immediately
+                # move between images without an extra click first.
+                self.image_list.setFocus()
                 return
         self._update_position()
 
