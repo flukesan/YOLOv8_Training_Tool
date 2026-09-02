@@ -18,6 +18,9 @@ class DatasetWidget(QWidget):
         self.images = []
         self.class_names = []
         self.class_colors = {}
+        # Row to auto-select the next time set_images() refreshes the list
+        # (e.g. after a delete) - None means no pending auto-select.
+        self._pending_select_row = None
         self.init_ui()
 
     def init_ui(self):
@@ -154,6 +157,17 @@ class DatasetWidget(QWidget):
             self.image_list.addItem(img.name)
 
         self.count_label.setText(f"{len(images)} images")
+
+        # If a delete (or similar refresh) requested auto-selecting a row,
+        # do it now that the list is repopulated - triggers
+        # currentRowChanged -> the next image loads automatically.
+        if self._pending_select_row is not None:
+            row = self._pending_select_row
+            self._pending_select_row = None
+            if self.image_list.count() > 0:
+                row = min(row, self.image_list.count() - 1)
+                self.image_list.setCurrentRow(row)
+                return
         self._update_position()
 
     def _update_position(self):
@@ -205,4 +219,10 @@ class DatasetWidget(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             selected_indices = [self.image_list.row(item) for item in selected_items]
             selected_images = [self.images[i] for i in selected_indices if i < len(self.images)]
+
+            # After the list is refreshed (set_images(), called by the
+            # deletion handler), auto-select the image that will have
+            # slid into the lowest deleted row - i.e. the "next" image.
+            self._pending_select_row = min(selected_indices)
+
             self.images_deleted.emit(selected_images)
