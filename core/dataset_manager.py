@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 import yaml
 from config.settings import Settings
+from core.image_validator import check_image_integrity
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,7 +32,8 @@ class DatasetManager:
         Returns:
             Dictionary with import statistics
         """
-        stats = {'imported': 0, 'skipped': 0, 'errors': 0}
+        stats = {'imported': 0, 'skipped': 0, 'errors': 0,
+                'corrupted': 0, 'corrupted_files': []}
         images_dir = self.structure['images']
         images_dir.mkdir(parents=True, exist_ok=True)
 
@@ -40,10 +42,7 @@ class DatasetManager:
 
             if source_path.is_file():
                 if self._is_image_file(source_path):
-                    if self._import_single_image(source_path, images_dir, copy):
-                        stats['imported'] += 1
-                    else:
-                        stats['errors'] += 1
+                    self._import_checked(source_path, images_dir, copy, stats)
                 else:
                     stats['skipped'] += 1
 
@@ -57,25 +56,48 @@ class DatasetManager:
                         for img_file in source_path.rglob(pattern):
                             if img_file.is_file() and img_file not in seen_files:
                                 seen_files.add(img_file)
-                                if self._import_single_image(img_file, images_dir, copy):
-                                    stats['imported'] += 1
-                                else:
-                                    stats['errors'] += 1
+                                self._import_checked(
+                                    img_file, images_dir, copy, stats)
 
         self.refresh_images_list()
         return stats
 
-    def remove_zero_byte_images(self) -> Dict[str, Any]:
+    def _import_checked(self, source: Path, images_dir: Path, copy: bool,
+                        stats: Dict[str, Any]):
+        """Import one image, skipping it if the file is empty or damaged.
+
+        Checking here means a truncated/corrupt file never enters the
+        project, instead of being caught later during training.
+        """
+        reason = check_image_integrity(source)
+        if reason:
+            stats['corrupted'] += 1
+            stats['corrupted_files'].append(f"{source.name} - {reason}")
+            logger.warning(f"Skipped corrupted image {source.name}: {reason}")
+            return
+
+        if self._import_single_image(source, images_dir, copy):
+            stats['imported'] += 1
+        else:
+            stats['errors'] += 1
+
+    def remove_corrupted_images(self, deep: bool = False) -> Dict[str, Any]:
         """
         Scan every image location in the project (images/, and
-        train/val/test/images/ if the dataset has been split) for
-        zero-byte files - a filename with no actual image data, typically
-        left by a failed/interrupted copy - and delete each one along with
-        its corresponding label file.
+        train/val/test/images/ if the dataset has been split) for empty or
+        damaged image files - a 0-byte file, or one that was truncated
+        mid-download/copy (a JPEG with no EOI marker, a PNG with no IEND
+        chunk) - and delete each one along with its label file.
+
+        Args:
+            deep: also fully decode each image with Pillow, catching
+                corruption inside an otherwise well-formed file. Much
+                slower on large datasets.
 
         Returns:
-            Dictionary with 'removed_images', 'removed_labels' (counts) and
-            'files' (list of removed image paths, as strings).
+            Dictionary with 'removed_images', 'removed_labels' (counts),
+            'files' (removed image paths as strings) and 'details'
+            (list of "name - reason" strings).
         """
         scan_dirs = [self.structure['images']]
         for split in ('train', 'val', 'test'):
@@ -86,6 +108,7 @@ class DatasetManager:
         removed_images = 0
         removed_labels = 0
         removed_files = []
+        details = []
         seen = set()
 
         for images_dir in scan_dirs:
@@ -98,23 +121,26 @@ class DatasetManager:
                             continue
                         seen.add(img_path)
 
-                        try:
-                            if img_path.stat().st_size != 0:
-                                continue
+                        reason = check_image_integrity(img_path, deep=deep)
+                        if reason is None:
+                            continue
 
+                        try:
                             label_path = (img_path.parent.parent / 'labels'
                                          / f"{img_path.stem}.txt")
                             img_path.unlink()
                             removed_images += 1
                             removed_files.append(str(img_path))
-                            logger.warning(f"Removed 0-byte image: {img_path}")
+                            details.append(f"{img_path.name} - {reason}")
+                            logger.warning(
+                                f"Removed corrupted image {img_path}: {reason}")
 
                             if label_path.exists():
                                 label_path.unlink()
                                 removed_labels += 1
                         except OSError as e:
                             logger.error(
-                                f"Could not remove zero-byte file {img_path}: {e}")
+                                f"Could not remove corrupted file {img_path}: {e}")
 
         if removed_images > 0:
             self.refresh_images_list()
@@ -123,6 +149,7 @@ class DatasetManager:
             'removed_images': removed_images,
             'removed_labels': removed_labels,
             'files': removed_files,
+            'details': details,
         }
 
     def _import_single_image(self, source: Path, dest_dir: Path, copy: bool) -> bool:

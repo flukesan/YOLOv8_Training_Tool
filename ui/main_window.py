@@ -353,7 +353,7 @@ class MainWindow(QMainWindow):
         dataset_menu.addAction("Split Dataset", self.split_dataset)
         dataset_menu.addAction("Statistics", self.show_statistics)
         dataset_menu.addSeparator()
-        dataset_menu.addAction("Clean Up Corrupted (0-byte) Images",
+        dataset_menu.addAction("Clean Up Corrupted Images",
                                self.cleanup_corrupted_images)
 
         training_menu = menubar.addMenu("Training")
@@ -446,17 +446,18 @@ class MainWindow(QMainWindow):
         )
 
         if files:
+            # Corrupt/truncated files are rejected during the copy itself,
+            # so they never enter the project.
             stats = self.dataset_manager.import_images(files)
-            # Auto-remove any 0-byte images that just got copied in (a name
-            # with no actual image data - failed/corrupt copy) along with
-            # their label files.
-            cleanup = self.dataset_manager.remove_zero_byte_images()
-            self._handle_removed_files(cleanup['files'])
 
             msg = f"Imported: {stats['imported']}\nSkipped: {stats['skipped']}"
-            if cleanup['removed_images'] > 0:
-                msg += (f"\nRemoved corrupted (0-byte): "
-                       f"{cleanup['removed_images']}")
+            if stats.get('corrupted'):
+                shown = stats['corrupted_files'][:10]
+                more = stats['corrupted'] - len(shown)
+                msg += (f"\n\nSkipped {stats['corrupted']} corrupted image(s) "
+                       f"- not imported:\n" + "\n".join(f"  {s}" for s in shown))
+                if more > 0:
+                    msg += f"\n  ... and {more} more"
             QMessageBox.information(self, "Import Complete", msg)
             self.refresh_dataset()
             self._update_workflow_steps()
@@ -469,25 +470,25 @@ class MainWindow(QMainWindow):
             self.current_image = None
 
     def cleanup_corrupted_images(self):
-        """Scan the whole project for zero-byte (corrupted) images and
-        remove them along with their label files. Useful for catching
-        files that were already corrupted before this check existed, or
-        images imported through Import Dataset / Auto-Annotate."""
+        """Scan the whole project for empty or damaged images (0-byte, or
+        truncated mid-copy) and remove them along with their label files.
+        Catches files that were already in the project before this check
+        existed, or that arrived via Import Dataset / Auto-Annotate."""
         if not self.dataset_manager:
             QMessageBox.warning(self, "Warning",
                                 "Please create or open a project first")
             return
 
-        cleanup = self.dataset_manager.remove_zero_byte_images()
+        cleanup = self.dataset_manager.remove_corrupted_images()
         self._handle_removed_files(cleanup['files'])
 
         if cleanup['removed_images'] == 0:
             QMessageBox.information(self, "Clean Up",
-                                    "No corrupted (0-byte) images found.")
+                                    "No corrupted images found.")
             return
 
-        shown = [Path(f).name for f in cleanup['files'][:20]]
-        more = len(cleanup['files']) - len(shown)
+        shown = cleanup['details'][:20]
+        more = len(cleanup['details']) - len(shown)
         file_list = '\n'.join(shown)
         if more > 0:
             file_list += f"\n... and {more} more"
