@@ -286,12 +286,28 @@ class ModelTrainer:
                 """Called at end of each training epoch"""
                 _check_control(trainer)
 
-                # Extract metrics
+                # Extract metrics.
+                # Use trainer.tloss (running mean over the whole epoch) rather
+                # than trainer.loss_items (the last batch only). loss_items is
+                # a single noisy sample, which made the live chart swing even
+                # when training was converging smoothly; tloss is also the
+                # value Ultralytics writes to results.csv, so the live chart
+                # and the Results dialog now agree.
                 metrics = {}
-                if hasattr(trainer, 'loss_items'):
-                    loss = trainer.loss_items
-                    if loss is not None and len(loss) > 0:
-                        metrics['train_loss'] = float(loss[0]) if len(loss) > 0 else 0.0
+                loss = getattr(trainer, 'tloss', None)
+                if loss is None:
+                    loss = getattr(trainer, 'loss_items', None)
+                if loss is not None:
+                    try:
+                        # tloss is (box, cls, dfl) for detection; index 0 is
+                        # box_loss, matching results.csv 'train/box_loss'.
+                        if hasattr(loss, '__len__'):
+                            if len(loss) > 0:
+                                metrics['train_loss'] = float(loss[0])
+                        else:
+                            metrics['train_loss'] = float(loss)
+                    except (TypeError, ValueError) as e:
+                        logger.debug(f"Could not read training loss: {e}")
 
                 if hasattr(trainer, 'metrics') and trainer.metrics:
                     results = trainer.metrics
