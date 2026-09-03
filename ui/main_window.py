@@ -352,6 +352,9 @@ class MainWindow(QMainWindow):
         dataset_menu.addAction("Auto-Annotate (Zero-Shot)...", self.open_auto_annotate)
         dataset_menu.addAction("Split Dataset", self.split_dataset)
         dataset_menu.addAction("Statistics", self.show_statistics)
+        dataset_menu.addSeparator()
+        dataset_menu.addAction("Clean Up Corrupted (0-byte) Images",
+                               self.cleanup_corrupted_images)
 
         training_menu = menubar.addMenu("Training")
         training_menu.addAction("Open Training Panel", self.open_training_window)
@@ -444,12 +447,60 @@ class MainWindow(QMainWindow):
 
         if files:
             stats = self.dataset_manager.import_images(files)
-            QMessageBox.information(
-                self, "Import Complete",
-                f"Imported: {stats['imported']}\nSkipped: {stats['skipped']}"
-            )
+            # Auto-remove any 0-byte images that just got copied in (a name
+            # with no actual image data - failed/corrupt copy) along with
+            # their label files.
+            cleanup = self.dataset_manager.remove_zero_byte_images()
+            self._handle_removed_files(cleanup['files'])
+
+            msg = f"Imported: {stats['imported']}\nSkipped: {stats['skipped']}"
+            if cleanup['removed_images'] > 0:
+                msg += (f"\nRemoved corrupted (0-byte): "
+                       f"{cleanup['removed_images']}")
+            QMessageBox.information(self, "Import Complete", msg)
             self.refresh_dataset()
             self._update_workflow_steps()
+
+    def _handle_removed_files(self, removed_paths):
+        """Clear the viewer if the currently displayed image was removed
+        (e.g. by the zero-byte cleanup)."""
+        if self.current_image and str(self.current_image) in removed_paths:
+            self.image_viewer.clear_image()
+            self.current_image = None
+
+    def cleanup_corrupted_images(self):
+        """Scan the whole project for zero-byte (corrupted) images and
+        remove them along with their label files. Useful for catching
+        files that were already corrupted before this check existed, or
+        images imported through Import Dataset / Auto-Annotate."""
+        if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning",
+                                "Please create or open a project first")
+            return
+
+        cleanup = self.dataset_manager.remove_zero_byte_images()
+        self._handle_removed_files(cleanup['files'])
+
+        if cleanup['removed_images'] == 0:
+            QMessageBox.information(self, "Clean Up",
+                                    "No corrupted (0-byte) images found.")
+            return
+
+        shown = [Path(f).name for f in cleanup['files'][:20]]
+        more = len(cleanup['files']) - len(shown)
+        file_list = '\n'.join(shown)
+        if more > 0:
+            file_list += f"\n... and {more} more"
+
+        QMessageBox.information(
+            self, "Clean Up Complete",
+            f"Removed {cleanup['removed_images']} corrupted image(s) and "
+            f"{cleanup['removed_labels']} label file(s):\n\n{file_list}"
+        )
+        self.refresh_dataset()
+        self._update_workflow_steps()
+        self._update_status(
+            f"Removed {cleanup['removed_images']} corrupted image(s)")
 
     def import_dataset(self):
         """Import an external COCO/YOLO dataset (e.g. a FiftyOne export)"""
