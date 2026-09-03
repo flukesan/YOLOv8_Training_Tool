@@ -13,7 +13,8 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QLineEdit, QFileDialog, QTableWidget,
                              QDoubleSpinBox, QCheckBox, QGroupBox, QProgressBar,
-                             QTextEdit, QMessageBox, QHeaderView)
+                             QTextEdit, QMessageBox, QHeaderView, QScrollArea,
+                             QWidget, QFrame)
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.zero_shot_annotator import (ZeroShotAnnotator, is_available,
@@ -96,7 +97,11 @@ class AutoAnnotateDialog(QDialog):
         self.default_output.mkdir(parents=True, exist_ok=True)
 
         self.setWindowTitle("Auto-Annotate (Zero-Shot)")
-        self.setMinimumSize(760, 620)
+        # Roomy enough that nothing is clipped, but the setup column also
+        # scrolls so the dialog still works on a short screen.
+        self.setMinimumSize(900, 560)
+        self.resize(1080, 780)
+        self.setSizeGripEnabled(True)
         self._init_ui()
         self._refresh_image_count()
 
@@ -129,8 +134,23 @@ class AutoAnnotateDialog(QDialog):
 
         body = QHBoxLayout()
         body.setSpacing(12)
-        body.addLayout(self._build_setup_column(), 3)
-        body.addLayout(self._build_run_column(), 2)
+
+        # The setup column is tall; put it in a scroll area so groups are
+        # never squeezed into each other on a small window.
+        setup_container = QWidget()
+        setup_container.setLayout(self._build_setup_column())
+        setup_scroll = QScrollArea()
+        setup_scroll.setWidgetResizable(True)
+        setup_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        setup_scroll.setWidget(setup_container)
+        setup_scroll.setMinimumWidth(420)
+        body.addWidget(setup_scroll, 3)
+
+        run_container = QWidget()
+        run_container.setLayout(self._build_run_column())
+        run_container.setMinimumWidth(320)
+        body.addWidget(run_container, 2)
+
         layout.addLayout(body, 1)
 
         self.setLayout(layout)
@@ -161,15 +181,26 @@ class AutoAnnotateDialog(QDialog):
         f_layout.addWidget(QLabel("Source (input_images/):"))
         src_row = QHBoxLayout()
         self.source_edit = QLineEdit(str(self.default_source))
+        # Keep the count in step when the path is typed, not just browsed
+        self.source_edit.textChanged.connect(self._refresh_image_count)
         src_row.addWidget(self.source_edit, 1)
         btn_src = QPushButton("Browse...")
         btn_src.clicked.connect(self._on_browse_source)
         src_row.addWidget(btn_src)
         f_layout.addLayout(src_row)
 
+        # Count + manual refresh: images are often dropped into the folder
+        # while this dialog is already open, and the path itself doesn't
+        # change in that case, so there is nothing to react to.
+        count_row = QHBoxLayout()
         self.count_label = QLabel("")
         self.count_label.setStyleSheet("color: #8891a0; font-size: 11px;")
-        f_layout.addWidget(self.count_label)
+        count_row.addWidget(self.count_label, 1)
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.setToolTip("Re-scan the source folder for images")
+        btn_refresh.clicked.connect(self._refresh_image_count)
+        count_row.addWidget(btn_refresh)
+        f_layout.addLayout(count_row)
 
         f_layout.addWidget(QLabel("Output (yolo_dataset/):"))
         out_row = QHBoxLayout()
@@ -195,9 +226,11 @@ class AutoAnnotateDialog(QDialog):
         self.ont_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch)
         self.ont_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents)
+            2, QHeaderView.ResizeMode.Fixed)
+        self.ont_table.setColumnWidth(2, 36)
+        self.ont_table.horizontalHeader().setStretchLastSection(False)
         self.ont_table.verticalHeader().setVisible(False)
-        self.ont_table.setMinimumHeight(140)
+        self.ont_table.setMinimumHeight(180)
         ont_layout.addWidget(self.ont_table)
         self._add_ontology_row()
 
@@ -319,12 +352,17 @@ class AutoAnnotateDialog(QDialog):
             "font-family: 'Courier New', monospace; font-size: 11px;")
         col.addWidget(self.log_text, 1)
 
-        foot_row = QHBoxLayout()
+        # Stacked, not side by side: the labels are long enough that a
+        # single row clipped them ("pen Output Folde") on a narrow dialog.
+        foot_row = QVBoxLayout()
+        foot_row.setSpacing(6)
         self.btn_open_output = QPushButton("Open Output Folder")
+        self.btn_open_output.setMinimumHeight(32)
         self.btn_open_output.clicked.connect(self._on_open_output_folder)
         foot_row.addWidget(self.btn_open_output)
 
         self.btn_import = QPushButton("Import into Current Project")
+        self.btn_import.setMinimumHeight(34)
         self.btn_import.setEnabled(False)
         self.btn_import.setStyleSheet(
             "QPushButton { background-color: #2196F3; color: #ffffff; "
@@ -361,7 +399,8 @@ class AutoAnnotateDialog(QDialog):
         for row in range(self.ont_table.rowCount()):
             if self.ont_table.cellWidget(row, 2) is button:
                 self.ont_table.removeRow(row)
-                return
+                break
+        # Always leave one editable row behind so the table is never empty
         if self.ont_table.rowCount() == 0:
             self._add_ontology_row()
 
@@ -392,6 +431,19 @@ class AutoAnnotateDialog(QDialog):
         if path:
             self.output_edit.setText(path)
 
+    @staticmethod
+    def _count_source_images(source: Path) -> int:
+        """Total images the annotator would pick up from `source`."""
+        from core.zero_shot_annotator import DEFAULT_EXTENSIONS
+
+        if not source.exists():
+            return 0
+        seen = set()
+        for ext in DEFAULT_EXTENSIONS:
+            for pattern in (f'*{ext}', f'*{ext.upper()}'):
+                seen.update(p for p in source.glob(pattern) if p.is_file())
+        return len(seen)
+
     def _refresh_image_count(self):
         from core.zero_shot_annotator import DEFAULT_EXTENSIONS
 
@@ -402,8 +454,10 @@ class AutoAnnotateDialog(QDialog):
 
         counts = {}
         for ext in DEFAULT_EXTENSIONS:
-            n = len(list(source.glob(f'*{ext}'))) + len(list(source.glob(f'*{ext.upper()}')))
-            counts[ext] = n
+            found = set()
+            for pattern in (f'*{ext}', f'*{ext.upper()}'):
+                found.update(p for p in source.glob(pattern) if p.is_file())
+            counts[ext] = len(found)
         total = sum(counts.values())
         parts = "  ".join(f"{ext} {n}" for ext, n in counts.items())
         self.count_label.setText(f"{total} image(s) found  ({parts})")
@@ -425,6 +479,16 @@ class AutoAnnotateDialog(QDialog):
         if not source_dir.exists():
             QMessageBox.warning(self, "Source Not Found",
                                 f"Folder does not exist:\n{source_dir}")
+            return
+
+        # Check for images before loading the model - the first run
+        # downloads GroundingDINO weights, so don't spend that on an
+        # empty folder.
+        if self._count_source_images(source_dir) == 0:
+            QMessageBox.warning(
+                self, "No Images",
+                f"No .jpg / .jpeg / .png images found in:\n{source_dir}\n\n"
+                "Copy the images you want to annotate into this folder first.")
             return
 
         output_dir = Path(self.output_edit.text())
@@ -516,6 +580,10 @@ class AutoAnnotateDialog(QDialog):
 
     def _on_failed(self, error_message):
         self._set_running_state(False)
+        # Leave the indeterminate/busy state the model-loading phase set,
+        # otherwise the bar keeps animating forever after a failure.
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
         self.status_label.setText("Failed")
         self._append_log(f"ERROR: {error_message}")
         QMessageBox.critical(self, "Auto-Annotation Failed", error_message)
@@ -563,6 +631,15 @@ class AutoAnnotateDialog(QDialog):
 
     def closeEvent(self, event):
         if self.worker is not None and self.worker.isRunning():
+            # Disconnect first: the worker can still be mid-image (or
+            # downloading weights) when the wait times out, and a signal
+            # arriving after the dialog is destroyed would crash.
+            try:
+                self.worker.progress.disconnect()
+                self.worker.finished_ok.disconnect()
+                self.worker.failed.disconnect()
+            except TypeError:
+                pass  # already disconnected
             self.worker.request_stop()
-            self.worker.wait(3000)
+            self.worker.wait(5000)
         super().closeEvent(event)
