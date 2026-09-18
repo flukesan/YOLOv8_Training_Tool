@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 
 from config.settings import Settings
+from core.image_validator import check_image_integrity
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -275,7 +276,8 @@ class DatasetImporter:
         labels_dir.mkdir(parents=True, exist_ok=True)
 
         stats = {'imported': 0, 'skipped': 0, 'errors': 0,
-                 'annotations': 0, 'classes': merged_classes}
+                 'annotations': 0, 'classes': merged_classes,
+                 'corrupted': 0, 'corrupted_files': []}
 
         if info['format'] == 'coco':
             items = self._iter_coco_items(source_dir, info['json_path'], mapping)
@@ -286,6 +288,16 @@ class DatasetImporter:
             if not label_lines and not include_unlabeled:
                 stats['skipped'] += 1
                 continue
+
+            # Keep empty/truncated files out of the project entirely
+            reason = check_image_integrity(src_image)
+            if reason:
+                stats['corrupted'] += 1
+                stats['corrupted_files'].append(f"{src_image.name} - {reason}")
+                logger.warning(
+                    f"Skipped corrupted image {src_image.name}: {reason}")
+                continue
+
             try:
                 dest = self._unique_dest(images_dir, src_image, filename_prefix)
                 shutil.copy2(src_image, dest)
