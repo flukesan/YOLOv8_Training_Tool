@@ -3,11 +3,93 @@ Training Results Dialog - Display training results and graphs
 """
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QTabWidget, QWidget, QScrollArea,
-                             QGridLayout, QGroupBox, QMessageBox)
-from PyQt6.QtCore import Qt
+                             QGridLayout, QGroupBox, QMessageBox,
+                             QTableWidget, QTableWidgetItem, QHeaderView,
+                             QAbstractItemView)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QFont
 from pathlib import Path
 import csv
+
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+# matplotlib charts are optional - guard the imports so the dialog still opens
+# if the plotting backend is unavailable.
+try:
+    from ui.widgets.metrics_chart import MetricsChart
+    from ui.widgets.validation_charts import ValidationCharts
+    _CHART_AVAILABLE = True
+except Exception:  # pragma: no cover - depends on matplotlib/Qt backend
+    MetricsChart = None
+    ValidationCharts = None
+    _CHART_AVAILABLE = False
+
+
+class _ValidationWorker(QThread):
+    """Runs model.val() off the UI thread and returns the raw plot data."""
+
+    finished_ok = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, weights_path, data_yaml=None, parent=None):
+        super().__init__(parent)
+        self.weights_path = weights_path
+        self.data_yaml = data_yaml
+
+    def run(self):
+        try:
+            from ultralytics import YOLO
+
+            model = YOLO(str(self.weights_path))
+            kwargs = {'verbose': False, 'plots': False}
+            if self.data_yaml:
+                kwargs['data'] = str(self.data_yaml)
+
+            metrics = model.val(**kwargs)
+
+            # Class names (ordered by index)
+            names_attr = getattr(model, 'names', None) or {}
+            if isinstance(names_attr, dict):
+                names = [names_attr[k] for k in sorted(names_attr.keys())]
+            else:
+                names = list(names_attr)
+
+            matrix = None
+            cm = getattr(metrics, 'confusion_matrix', None)
+            if cm is not None:
+                matrix = getattr(cm, 'matrix', None)
+
+            # Per-class precision / recall / mAP (from metrics.box)
+            per_class = []
+            box = getattr(metrics, 'box', None)
+            if box is not None and hasattr(box, 'ap_class_index'):
+                for i, c in enumerate(box.ap_class_index):
+                    try:
+                        p, r, ap50, ap = box.class_result(i)
+                    except Exception:
+                        continue
+                    c = int(c)
+                    cname = names[c] if c < len(names) else f"class_{c}"
+                    per_class.append({
+                        'class': cname,
+                        'precision': float(p),
+                        'recall': float(r),
+                        'mAP50': float(ap50),
+                        'mAP50-95': float(ap),
+                    })
+
+            result = {
+                'names': names,
+                'matrix': matrix,
+                'curves': list(getattr(metrics, 'curves', []) or []),
+                'curves_results': list(getattr(metrics, 'curves_results', []) or []),
+                'per_class': per_class,
+            }
+            self.finished_ok.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class TrainingResultsDialog(QDialog):
@@ -191,7 +273,104 @@ class TrainingResultsDialog(QDialog):
         layout.setSpacing(20)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Graph images
+        # Dynamic chart drawn from results.csv (always renders when the CSV
+        # exists, even if Ultralytics did not save the .png plots).
+        self.results_chart = None
+        if _CHART_AVAILABLE:
+            chart_group = QGroupBox("Metrics Over Epochs (from results.csv)")
+            chart_group.setStyleSheet("""
+                QGroupBox {
+                    font-weight: bold;
+                    font-size: 12px;
+                    color: #212529;
+                    border: 2px solid #cccccc;
+                    border-radius: 5px;
+                    margin-top: 10px;
+                    padding: 15px;
+                    background-color: white;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+                }
+            """)
+            chart_layout = QVBoxLayout()
+            self.results_chart = MetricsChart(dark=False)
+            self.results_chart.setMinimumHeight(500)
+            chart_layout.addWidget(self.results_chart)
+            chart_group.setLayout(chart_layout)
+            layout.addWidget(chart_group)
+
+        # Interactive confusion matrix + curves, generated on demand by
+        # running validation on the trained weights (data not in results.csv).
+        self.validation_charts = None
+        if _CHART_AVAILABLE:
+            val_group = QGroupBox("Confusion Matrix & Curves (interactive)")
+            val_group.setStyleSheet("""
+                QGroupBox {
+                    font-weight: bold;
+                    font-size: 12px;
+                    color: #212529;
+                    border: 2px solid #cccccc;
+                    border-radius: 5px;
+                    margin-top: 10px;
+                    padding: 15px;
+                    background-color: white;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+                }
+            """)
+            val_layout = QVBoxLayout()
+
+            self.btn_generate = QPushButton("🔄  Generate Interactive Charts (run validation)")
+            self.btn_generate.setMinimumHeight(38)
+            self.btn_generate.setStyleSheet(
+                "QPushButton { background-color: #2196F3; color: white; "
+                "border: none; border-radius: 6px; font-weight: 600; }"
+                "QPushButton:hover { background-color: #1e88e5; }"
+                "QPushButton:disabled { background-color: #90caf9; }"
+            )
+            self.btn_generate.clicked.connect(self._on_generate_charts)
+            val_layout.addWidget(self.btn_generate)
+
+            # Per-class metrics table (populated after validation runs)
+            self.per_class_table = QTableWidget()
+            self.per_class_table.setColumnCount(5)
+            self.per_class_table.setHorizontalHeaderLabels(
+                ['Class', 'Precision', 'Recall', 'mAP@50', 'mAP@50-95'])
+            self.per_class_table.verticalHeader().setVisible(False)
+            self.per_class_table.setEditTriggers(
+                QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.per_class_table.horizontalHeader().setSectionResizeMode(
+                QHeaderView.ResizeMode.Stretch)
+            self.per_class_table.setMaximumHeight(220)
+            self.per_class_table.setStyleSheet("""
+                QTableWidget { background-color: white; color: #212529;
+                    gridline-color: #dee2e6; font-size: 12px;
+                    border: 1px solid #cccccc; border-radius: 5px; }
+                QTableWidget::item { color: #212529; padding: 5px 8px; }
+                QHeaderView::section { background-color: #e9ecef; color: #212529;
+                    font-weight: bold; padding: 6px; border: none;
+                    border-right: 1px solid #dee2e6; }
+            """)
+            self.per_class_table.setVisible(False)
+            val_layout.addWidget(QLabel(
+                "<b>Per-class metrics</b> "
+                "<span style='color:#8891a0;'>(recall &lt; 0.90 highlighted)</span>"))
+            val_layout.addWidget(self.per_class_table)
+
+            self.validation_charts = ValidationCharts()
+            self.validation_charts.setMinimumHeight(700)
+            val_layout.addWidget(self.validation_charts)
+
+            val_group.setLayout(val_layout)
+            layout.addWidget(val_group)
+
+        # Graph images (Ultralytics-generated plots, shown when available)
         self.graph_labels = {}
 
         graphs = [
@@ -228,9 +407,14 @@ class TrainingResultsDialog(QDialog):
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setMinimumHeight(400)
             label.setMaximumHeight(600)
+            # Explicit dark text color so the placeholder message is readable
+            # on the white background (global dark theme would otherwise make it
+            # light text on white = invisible).
             label.setStyleSheet("""
                 border: 1px solid #dee2e6;
                 background-color: white;
+                color: #495057;
+                font-size: 13px;
                 padding: 10px;
             """)
             label.setScaledContents(False)  # Don't stretch, keep aspect ratio
@@ -251,16 +435,11 @@ class TrainingResultsDialog(QDialog):
 
     def init_metrics_tab(self):
         """Initialize metrics tab"""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: #f5f5f5; }")
-
-        content = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        info = QLabel("📊 Detailed Metrics Per Epoch (Last 10 Epochs)")
+        info = QLabel("📊 Detailed Metrics Per Epoch (all epochs)")
         info.setStyleSheet("""
             font-weight: bold;
             font-size: 14px;
@@ -271,27 +450,53 @@ class TrainingResultsDialog(QDialog):
         """)
         layout.addWidget(info)
 
-        self.metrics_text = QLabel("Loading...")
-        self.metrics_text.setWordWrap(True)
-        self.metrics_text.setStyleSheet("""
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            padding: 15px;
-            background-color: white;
-            border: 1px solid #cccccc;
-            border-radius: 5px;
+        # QTableWidget provides native scrollbars and readable cells regardless
+        # of the surrounding dark theme (we style text/background explicitly).
+        self.metrics_table = QTableWidget()
+        self.metrics_table.setColumnCount(6)
+        self.metrics_table.setHorizontalHeaderLabels(
+            ['Epoch', 'mAP@0.5', 'mAP@0.5:0.95', 'Precision', 'Recall', 'Box Loss']
+        )
+        self.metrics_table.verticalHeader().setVisible(False)
+        self.metrics_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.metrics_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.metrics_table.setAlternatingRowColors(True)
+        self.metrics_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.metrics_table.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                alternate-background-color: #f2f6fb;
+                color: #212529;
+                gridline-color: #dee2e6;
+                font-size: 12px;
+                border: 1px solid #cccccc;
+                border-radius: 5px;
+            }
+            QTableWidget::item {
+                color: #212529;
+                padding: 6px 8px;
+            }
+            QTableWidget::item:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            QHeaderView::section {
+                background-color: #e9ecef;
+                color: #212529;
+                font-weight: bold;
+                padding: 8px;
+                border: none;
+                border-right: 1px solid #dee2e6;
+                border-bottom: 1px solid #dee2e6;
+            }
         """)
-        layout.addWidget(self.metrics_text)
+        layout.addWidget(self.metrics_table)
 
-        layout.addStretch()
-
-        content.setLayout(layout)
-        scroll.setWidget(content)
-
-        tab_layout = QVBoxLayout()
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.addWidget(scroll)
-        self.metrics_tab.setLayout(tab_layout)
+        self.metrics_tab.setLayout(layout)
 
     def load_results(self):
         """Load training results"""
@@ -349,15 +554,9 @@ class TrainingResultsDialog(QDialog):
                         except:
                             self.metric_labels[key].setText(value)
 
-                # Load detailed metrics
-                metrics_text = "<pre style='line-height: 1.5;'>"
-                metrics_text += "<b>Epoch\tmAP50\t\tmAP50-95\t\tPrecision\tRecall\t\tLoss</b>\n"
-                metrics_text += "─" * 85 + "\n"
-
-                # Show last 10 epochs
-                display_rows = rows[-10:] if len(rows) >= 10 else rows
-
-                for row in display_rows:
+                # Populate the metrics table with ALL epochs (scrollable)
+                self.metrics_table.setRowCount(0)
+                for row in rows:
                     try:
                         epoch = int(float(row.get('epoch', 0))) + 1
                         map50 = float(row.get('metrics/mAP50(B)', 0))
@@ -365,43 +564,120 @@ class TrainingResultsDialog(QDialog):
                         precision = float(row.get('metrics/precision(B)', 0))
                         recall = float(row.get('metrics/recall(B)', 0))
                         loss = float(row.get('train/box_loss', 0))
-
-                        metrics_text += f"{epoch}\t{map50:.4f}\t\t{map5095:.4f}\t\t\t{precision:.4f}\t\t{recall:.4f}\t\t{loss:.4f}\n"
-                    except:
+                    except (ValueError, TypeError):
                         continue
 
-                metrics_text += "</pre>"
-                self.metrics_text.setText(metrics_text)
+                    values = [
+                        str(epoch),
+                        f"{map50:.4f}",
+                        f"{map5095:.4f}",
+                        f"{precision:.4f}",
+                        f"{recall:.4f}",
+                        f"{loss:.4f}",
+                    ]
+
+                    table_row = self.metrics_table.rowCount()
+                    self.metrics_table.insertRow(table_row)
+                    for col, val in enumerate(values):
+                        item = QTableWidgetItem(val)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.metrics_table.setItem(table_row, col, item)
+
+                # Scroll to the last (most recent) epoch
+                self.metrics_table.scrollToBottom()
+
+                # Feed the dynamic chart from the same CSV rows
+                self._update_results_chart(rows)
 
         except Exception as e:
-            print(f"Error loading metrics: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error loading metrics: {e}", exc_info=True)
+
+    def _update_results_chart(self, rows):
+        """Build a history dict from results.csv rows and draw the chart."""
+        if self.results_chart is None:
+            return
+
+        history = {
+            'train_loss': [],
+            'val_loss': [],
+            'precision': [],
+            'recall': [],
+            'mAP50': [],
+            'mAP50-95': [],
+        }
+        csv_map = {
+            'train_loss': 'train/box_loss',
+            'val_loss': 'val/box_loss',
+            'precision': 'metrics/precision(B)',
+            'recall': 'metrics/recall(B)',
+            'mAP50': 'metrics/mAP50(B)',
+            'mAP50-95': 'metrics/mAP50-95(B)',
+        }
+
+        for row in rows:
+            for key, csv_key in csv_map.items():
+                raw = row.get(csv_key)
+                if raw is None or str(raw).strip() == '':
+                    continue
+                try:
+                    history[key].append(float(raw))
+                except (ValueError, TypeError):
+                    continue
+
+        self.results_chart.update_data(history)
+
+    def _find_graph_file(self, key):
+        """Locate a graph PNG, falling back to a recursive search.
+
+        Ultralytics normally writes plots to the top level of the run
+        directory, but depending on version/config they can live in a
+        nested folder. Search recursively so graphs are found either way.
+        """
+        top_level = self.results_dir / f'{key}.png'
+        if top_level.exists():
+            return top_level
+
+        matches = sorted(self.results_dir.rglob(f'{key}.png'))
+        return matches[0] if matches else None
 
     def load_graphs(self):
         """Load graph images"""
-        for key, label in self.graph_labels.items():
-            img_path = self.results_dir / f'{key}.png'
+        found_any = False
 
-            if img_path.exists():
+        for key, label in self.graph_labels.items():
+            img_path = self._find_graph_file(key)
+
+            if img_path is not None:
                 pixmap = QPixmap(str(img_path))
                 if not pixmap.isNull():
-                    # Get label size
-                    label_width = 1100  # Fixed width for consistency
-                    label_height = 500  # Fixed height
-
-                    # Scale pixmap to fit while maintaining aspect ratio
                     scaled_pixmap = pixmap.scaled(
-                        label_width, label_height,
+                        1100, 500,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation
                     )
                     label.setPixmap(scaled_pixmap)
                     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    found_any = True
                 else:
-                    label.setText(f"❌ Failed to load {key}.png")
+                    label.setText(f"⚠️ Failed to load {key}.png (file may be corrupted)")
             else:
-                label.setText(f"❌ {key}.png not found")
+                label.setText(f"⚠️ {key}.png not generated for this run")
+
+        # If nothing was found at all, help diagnose by listing what PNGs
+        # actually exist in the run directory.
+        if not found_any:
+            available = sorted(p.name for p in self.results_dir.rglob('*.png'))
+            if available:
+                logger.warning(
+                    f"No expected graphs found in {self.results_dir}. "
+                    f"Available images: {available}"
+                )
+            else:
+                logger.warning(
+                    f"No .png plots found in {self.results_dir}. "
+                    "Training may have been stopped before plots were generated, "
+                    "or plots=True was disabled."
+                )
 
     def load_model_info(self):
         """Load model information"""
@@ -425,6 +701,109 @@ class TrainingResultsDialog(QDialog):
             info_text += f"<b>Size:</b> {size_mb:.2f} MB<br>"
 
         self.model_info_label.setText(info_text)
+
+    # -------------------------------------------------- interactive validation
+    def _find_weights(self):
+        """Locate best.pt (preferred) or last.pt for this run."""
+        for name in ('best.pt', 'last.pt'):
+            candidate = self.results_dir / 'weights' / name
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _find_data_yaml(self):
+        """Read the dataset yaml path recorded in args.yaml, if present."""
+        args_yaml = self.results_dir / 'args.yaml'
+        if not args_yaml.exists():
+            return None
+        try:
+            import yaml
+            with open(args_yaml, 'r') as f:
+                args = yaml.safe_load(f) or {}
+            data = args.get('data')
+            if data and Path(data).exists():
+                return Path(data)
+        except Exception as e:
+            logger.warning(f"Could not read data path from args.yaml: {e}")
+        return None
+
+    def _on_generate_charts(self):
+        """Run validation in a background thread and plot the raw results."""
+        if self.validation_charts is None:
+            return
+
+        weights = self._find_weights()
+        if weights is None:
+            QMessageBox.warning(
+                self, "No Weights",
+                "Could not find best.pt or last.pt in this run's weights folder."
+            )
+            return
+
+        data_yaml = self._find_data_yaml()  # may be None -> model uses its own
+
+        self.btn_generate.setEnabled(False)
+        self.btn_generate.setText("Running validation… please wait")
+        self.validation_charts.show_message(
+            "Running validation on the dataset…\nThis may take a moment."
+        )
+
+        self._val_worker = _ValidationWorker(weights, data_yaml, self)
+        self._val_worker.finished_ok.connect(self._on_val_done)
+        self._val_worker.failed.connect(self._on_val_failed)
+        self._val_worker.start()
+
+    def _on_val_done(self, result):
+        self.btn_generate.setEnabled(True)
+        self.btn_generate.setText("🔄  Regenerate Interactive Charts")
+        self._populate_per_class_table(result.get('per_class') or [])
+        try:
+            self.validation_charts.plot(
+                result.get('matrix'),
+                result.get('names'),
+                result.get('curves'),
+                result.get('curves_results'),
+            )
+        except Exception as e:
+            logger.error(f"Failed to render validation charts: {e}", exc_info=True)
+            self.validation_charts.show_message(f"Failed to render charts:\n{e}")
+
+    def _populate_per_class_table(self, per_class):
+        """Fill the per-class table; flag rows whose recall is below 0.90."""
+        from PyQt6.QtGui import QColor
+
+        table = self.per_class_table
+        table.setRowCount(0)
+        if not per_class:
+            table.setVisible(False)
+            return
+
+        for row in per_class:
+            r = table.rowCount()
+            table.insertRow(r)
+            low_recall = row['recall'] < 0.90
+            values = [
+                row['class'],
+                f"{row['precision']:.3f}",
+                f"{row['recall']:.3f}",
+                f"{row['mAP50']:.3f}",
+                f"{row['mAP50-95']:.3f}",
+            ]
+            for col, val in enumerate(values):
+                item = QTableWidgetItem(val)
+                if col > 0:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Highlight the recall cell (and row) when recall is low
+                if low_recall:
+                    item.setForeground(QColor('#c0392b'))
+                table.setItem(r, col, item)
+        table.setVisible(True)
+
+    def _on_val_failed(self, msg):
+        self.btn_generate.setEnabled(True)
+        self.btn_generate.setText("🔄  Generate Interactive Charts (run validation)")
+        logger.error(f"Validation run failed: {msg}")
+        self.validation_charts.show_message(f"Validation failed:\n{msg}")
 
     def open_results_folder(self):
         """Open results folder in file explorer"""

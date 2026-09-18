@@ -141,11 +141,12 @@ class MainWindow(QMainWindow):
         self.image_viewer.polygon_added.connect(self.on_polygon_added)
         self.image_viewer.annotation_selected.connect(self.on_annotation_selected_from_viewer)
         self.image_viewer.annotation_updated.connect(self.on_annotation_updated)
+        self.image_viewer.annotation_delete_requested.connect(self.on_delete_annotation)
 
         # Right panel with tabs
-        right_panel = QTabWidget()
-        right_panel.setMinimumWidth(300)
-        right_panel.setMaximumWidth(380)
+        self.right_panel = QTabWidget()
+        self.right_panel.setMinimumWidth(300)
+        self.right_panel.setMaximumWidth(380)
 
         # Tab 1: Dataset & Classes
         data_tab = QWidget()
@@ -164,7 +165,7 @@ class MainWindow(QMainWindow):
         data_layout.addWidget(self.dataset_widget)
 
         data_tab.setLayout(data_layout)
-        right_panel.addTab(data_tab, "Dataset")
+        self.right_panel.addTab(data_tab, "Dataset")
 
         # Tab 2: Annotations
         ann_tab = QWidget()
@@ -177,7 +178,7 @@ class MainWindow(QMainWindow):
         ann_layout.addWidget(self.label_widget)
 
         ann_tab.setLayout(ann_layout)
-        right_panel.addTab(ann_tab, "Annotations")
+        self.right_panel.addTab(ann_tab, "Annotations")
 
         # Training window (separate floating window)
         self.training_window = TrainingWindow(self)
@@ -196,7 +197,7 @@ class MainWindow(QMainWindow):
         # Splitter: Image viewer (left) | Right panel (right)
         h_splitter = QSplitter(Qt.Orientation.Horizontal)
         h_splitter.addWidget(self.image_viewer)
-        h_splitter.addWidget(right_panel)
+        h_splitter.addWidget(self.right_panel)
         h_splitter.setStretchFactor(0, 3)
         h_splitter.setStretchFactor(1, 1)
 
@@ -343,12 +344,17 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Save", self.save_project)
         file_menu.addSeparator()
         file_menu.addAction("Import Images", self.import_images)
+        file_menu.addAction("Import Dataset (COCO/YOLO)...", self.import_dataset)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
 
         dataset_menu = menubar.addMenu("Dataset")
+        dataset_menu.addAction("Auto-Annotate (Zero-Shot)...", self.open_auto_annotate)
         dataset_menu.addAction("Split Dataset", self.split_dataset)
         dataset_menu.addAction("Statistics", self.show_statistics)
+        dataset_menu.addSeparator()
+        dataset_menu.addAction("Clean Up Corrupted (0-byte) Images",
+                               self.cleanup_corrupted_images)
 
         training_menu = menubar.addMenu("Training")
         training_menu.addAction("Open Training Panel", self.open_training_window)
@@ -361,6 +367,27 @@ class MainWindow(QMainWindow):
         help_menu = menubar.addMenu("Help")
         help_menu.addAction("About", self.show_about)
 
+    def _reset_project_state(self):
+        """Clear all in-memory data and UI widgets so a project starts clean.
+
+        Without this, creating/opening a project leaves the previous
+        project's classes, images and annotations visible."""
+        self.current_image = None
+        self.previous_image = None
+        self.classes = []
+
+        # Reset the right-panel widgets
+        self.class_manager.set_classes([])
+        self.dataset_widget.set_images([])
+        self.dataset_widget.set_classes([], {})
+        self.dataset_widget.update_annotation_summary([])
+        self.label_widget.update_annotations([])
+        self.label_widget.set_classes([], {})
+
+        # Reset the image canvas
+        self.image_viewer.set_classes([], {})
+        self.image_viewer.clear_image()
+
     def new_project(self):
         """Create new project"""
         dialog = NewProjectDialog(self)
@@ -371,6 +398,8 @@ class MainWindow(QMainWindow):
             self.dataset_manager = DatasetManager(self.project_path)
             self.label_manager = LabelManager(self.project_path)
             self.model_trainer = ModelTrainer(self.project_path)
+            # Clear any leftover data/UI from the previous project
+            self._reset_project_state()
             self.project_label.setText(f"Project: {info['name']}")
             self.project_label.setStyleSheet(
                 "color: #4CAF50; font-size: 13px; font-weight: 500; "
@@ -387,6 +416,8 @@ class MainWindow(QMainWindow):
             self.dataset_manager = DatasetManager(self.project_path)
             self.label_manager = LabelManager(self.project_path)
             self.model_trainer = ModelTrainer(self.project_path)
+            # Clear leftover data/UI from the previous project before loading
+            self._reset_project_state()
             self.project_label.setText(f"Project: {self.project_path.name}")
             self.project_label.setStyleSheet(
                 "color: #4CAF50; font-size: 13px; font-weight: 500; "
@@ -416,12 +447,145 @@ class MainWindow(QMainWindow):
 
         if files:
             stats = self.dataset_manager.import_images(files)
-            QMessageBox.information(
-                self, "Import Complete",
-                f"Imported: {stats['imported']}\nSkipped: {stats['skipped']}"
-            )
+            # Auto-remove any 0-byte images that just got copied in (a name
+            # with no actual image data - failed/corrupt copy) along with
+            # their label files.
+            cleanup = self.dataset_manager.remove_zero_byte_images()
+            self._handle_removed_files(cleanup['files'])
+
+            msg = f"Imported: {stats['imported']}\nSkipped: {stats['skipped']}"
+            if cleanup['removed_images'] > 0:
+                msg += (f"\nRemoved corrupted (0-byte): "
+                       f"{cleanup['removed_images']}")
+            QMessageBox.information(self, "Import Complete", msg)
             self.refresh_dataset()
             self._update_workflow_steps()
+
+    def _handle_removed_files(self, removed_paths):
+        """Clear the viewer if the currently displayed image was removed
+        (e.g. by the zero-byte cleanup)."""
+        if self.current_image and str(self.current_image) in removed_paths:
+            self.image_viewer.clear_image()
+            self.current_image = None
+
+    def cleanup_corrupted_images(self):
+        """Scan the whole project for zero-byte (corrupted) images and
+        remove them along with their label files. Useful for catching
+        files that were already corrupted before this check existed, or
+        images imported through Import Dataset / Auto-Annotate."""
+        if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning",
+                                "Please create or open a project first")
+            return
+
+        cleanup = self.dataset_manager.remove_zero_byte_images()
+        self._handle_removed_files(cleanup['files'])
+
+        if cleanup['removed_images'] == 0:
+            QMessageBox.information(self, "Clean Up",
+                                    "No corrupted (0-byte) images found.")
+            return
+
+        shown = [Path(f).name for f in cleanup['files'][:20]]
+        more = len(cleanup['files']) - len(shown)
+        file_list = '\n'.join(shown)
+        if more > 0:
+            file_list += f"\n... and {more} more"
+
+        QMessageBox.information(
+            self, "Clean Up Complete",
+            f"Removed {cleanup['removed_images']} corrupted image(s) and "
+            f"{cleanup['removed_labels']} label file(s):\n\n{file_list}"
+        )
+        self.refresh_dataset()
+        self._update_workflow_steps()
+        self._update_status(
+            f"Removed {cleanup['removed_images']} corrupted image(s)")
+
+    def import_dataset(self):
+        """Import an external COCO/YOLO dataset (e.g. a FiftyOne export)"""
+        if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning",
+                                "Please create or open a project first")
+            return
+
+        from ui.dialogs.import_dataset_dialog import ImportDatasetDialog
+        from core.dataset_importer import DatasetImporter
+
+        dialog = ImportDatasetDialog(self.project_path, self.classes, self)
+        if dialog.exec() != ImportDatasetDialog.DialogCode.Accepted:
+            return
+
+        cfg = dialog.get_import_config()
+        self._update_status("Importing dataset...")
+        try:
+            importer = DatasetImporter(self.project_path, self.classes)
+            stats = importer.import_dataset(
+                cfg['source_dir'],
+                fmt=cfg['format'],
+                selected_classes=cfg['selected_classes'],
+                filename_prefix=cfg['filename_prefix'],
+                include_unlabeled=cfg['include_unlabeled'],
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Import Failed",
+                                 f"Failed to import dataset:\n{e}")
+            self._update_status("Dataset import failed")
+            return
+
+        # Adopt the merged class list (existing indices preserved, new
+        # classes appended) and propagate to all widgets + config.yaml.
+        self._adopt_merged_classes(stats['classes'])
+
+        self.refresh_dataset()
+        self._update_workflow_steps()
+        self._update_status("Dataset import complete")
+
+        QMessageBox.information(
+            self, "Import Complete",
+            f"Images imported: {stats['imported']}\n"
+            f"Annotations: {stats['annotations']}\n"
+            f"Skipped (no annotations): {stats['skipped']}\n"
+            f"Errors: {stats['errors']}\n\n"
+            f"Project classes: {', '.join(self.classes)}"
+        )
+
+    def _adopt_merged_classes(self, merged_classes):
+        """Apply a merged class list (existing indices preserved, new
+        classes appended) to every widget that displays classes, and
+        persist it to config.yaml. Shared by the COCO/YOLO importer and
+        the Auto-Annotate (Zero-Shot) hand-off."""
+        self.classes = merged_classes
+        self.class_manager.set_classes(self.classes)
+        if self.label_manager:
+            self.label_manager.set_classes(self.classes)
+            self.image_viewer.set_classes(self.classes,
+                                          self.label_manager.class_colors)
+            self.label_widget.set_classes(self.classes,
+                                          self.label_manager.class_colors)
+            self.dataset_widget.set_classes(self.classes,
+                                            self.label_manager.class_colors)
+        self.save_classes_to_config()
+
+    def open_auto_annotate(self):
+        """Open the zero-shot Auto-Annotate (Grounding DINO) dialog"""
+        if not self.dataset_manager:
+            QMessageBox.warning(self, "Warning",
+                                "Please create or open a project first")
+            return
+
+        from ui.dialogs.auto_annotate_dialog import AutoAnnotateDialog
+
+        dialog = AutoAnnotateDialog(self.project_path, self.classes, self)
+        dialog.dataset_imported.connect(self._on_auto_annotate_imported)
+        dialog.exec()
+
+    def _on_auto_annotate_imported(self, merged_classes):
+        """Handle a successful hand-off from the Auto-Annotate dialog"""
+        self._adopt_merged_classes(merged_classes)
+        self.refresh_dataset()
+        self._update_workflow_steps()
+        self._update_status("Auto-annotated dataset imported")
 
     def load_image(self, image_path: str):
         """Load image in viewer"""
@@ -540,8 +704,21 @@ class MainWindow(QMainWindow):
         self._update_status(f"Pasted {len(prev_annotations)} annotations from previous image")
 
     def on_annotation_selected_from_viewer(self, index):
-        """Handle annotation selected in ImageViewer → highlight in LabelWidget"""
+        """Annotation selection in ImageViewer -> highlight in LabelWidget and
+        switch the right panel tab: clicking a box opens the Annotations tab
+        (and focuses the list so Delete works), clicking empty space returns
+        to the Dataset tab."""
         self.label_widget.select_annotation(index)
+
+        if index >= 0:
+            # Annotations tab is index 1 (visual feedback of the selection)
+            self.right_panel.setCurrentIndex(1)
+            # Keep keyboard focus on the image so arrow keys nudge the box and
+            # Delete removes it (both handled by the image viewer).
+            self.image_viewer.setFocus()
+        else:
+            # Empty click -> back to Dataset tab (index 0)
+            self.right_panel.setCurrentIndex(0)
 
     def on_annotation_selected_from_list(self, index):
         """Handle annotation selected in LabelWidget → highlight in ImageViewer"""
@@ -866,7 +1043,15 @@ class MainWindow(QMainWindow):
                 other_formats = [f for f in formats if f != 'pt']
                 if other_formats:
                     export_mgr = ExportManager(best_weights)
-                    results.update(export_mgr.export_multiple(other_formats))
+                    # export_multiple returns {format: Path|None}; normalise it
+                    # to the same {'success', 'path'} shape used for 'pt' so the
+                    # summary below can treat every entry uniformly.
+                    for fmt, path in export_mgr.export_multiple(other_formats).items():
+                        if path is not None:
+                            results[fmt] = {'success': True, 'path': str(path)}
+                        else:
+                            results[fmt] = {'success': False,
+                                            'error': 'Export produced no file'}
 
                 success_count = sum(1 for r in results.values() if r.get('success'))
                 failed_count = len(results) - success_count

@@ -5,9 +5,12 @@ import os
 import shutil
 import random
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import yaml
 from config.settings import Settings
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DatasetManager:
@@ -45,15 +48,82 @@ class DatasetManager:
                     stats['skipped'] += 1
 
             elif source_path.is_dir():
-                for img_file in source_path.rglob('*'):
-                    if img_file.is_file() and self._is_image_file(img_file):
-                        if self._import_single_image(img_file, images_dir, copy):
-                            stats['imported'] += 1
-                        else:
-                            stats['errors'] += 1
+                # Use specific patterns for better performance
+                # Avoids scanning every file, including non-image files
+                seen_files = set()
+                for ext in Settings.IMAGE_FORMATS:
+                    # Match both lowercase and uppercase extensions
+                    for pattern in [f'*{ext}', f'*{ext.upper()}']:
+                        for img_file in source_path.rglob(pattern):
+                            if img_file.is_file() and img_file not in seen_files:
+                                seen_files.add(img_file)
+                                if self._import_single_image(img_file, images_dir, copy):
+                                    stats['imported'] += 1
+                                else:
+                                    stats['errors'] += 1
 
         self.refresh_images_list()
         return stats
+
+    def remove_zero_byte_images(self) -> Dict[str, Any]:
+        """
+        Scan every image location in the project (images/, and
+        train/val/test/images/ if the dataset has been split) for
+        zero-byte files - a filename with no actual image data, typically
+        left by a failed/interrupted copy - and delete each one along with
+        its corresponding label file.
+
+        Returns:
+            Dictionary with 'removed_images', 'removed_labels' (counts) and
+            'files' (list of removed image paths, as strings).
+        """
+        scan_dirs = [self.structure['images']]
+        for split in ('train', 'val', 'test'):
+            split_images = self.structure[split] / 'images'
+            if split_images.exists():
+                scan_dirs.append(split_images)
+
+        removed_images = 0
+        removed_labels = 0
+        removed_files = []
+        seen = set()
+
+        for images_dir in scan_dirs:
+            if not images_dir.exists():
+                continue
+            for ext in Settings.IMAGE_FORMATS:
+                for pattern in (f'*{ext}', f'*{ext.upper()}'):
+                    for img_path in images_dir.glob(pattern):
+                        if img_path in seen or not img_path.is_file():
+                            continue
+                        seen.add(img_path)
+
+                        try:
+                            if img_path.stat().st_size != 0:
+                                continue
+
+                            label_path = (img_path.parent.parent / 'labels'
+                                         / f"{img_path.stem}.txt")
+                            img_path.unlink()
+                            removed_images += 1
+                            removed_files.append(str(img_path))
+                            logger.warning(f"Removed 0-byte image: {img_path}")
+
+                            if label_path.exists():
+                                label_path.unlink()
+                                removed_labels += 1
+                        except OSError as e:
+                            logger.error(
+                                f"Could not remove zero-byte file {img_path}: {e}")
+
+        if removed_images > 0:
+            self.refresh_images_list()
+
+        return {
+            'removed_images': removed_images,
+            'removed_labels': removed_labels,
+            'files': removed_files,
+        }
 
     def _import_single_image(self, source: Path, dest_dir: Path, copy: bool) -> bool:
         """Import a single image file"""
@@ -75,7 +145,7 @@ class DatasetManager:
 
             return True
         except Exception as e:
-            print(f"Error importing {source}: {e}")
+            logger.error(f"Error importing {source}: {e}")
             return False
 
     def _is_image_file(self, file_path: Path) -> bool:
@@ -95,13 +165,29 @@ class DatasetManager:
         if ratios is None:
             ratios = Settings.DATASET_SPLIT
 
+        # Validate ratios
+        total = ratios.get('train', 0) + ratios.get('val', 0) + ratios.get('test', 0)
+        if abs(total - 1.0) > 0.01:  # Allow small floating point error
+            raise ValueError(f"Split ratios must sum to 1.0, got {total}")
+
+        for split, ratio in ratios.items():
+            if not (0 <= ratio <= 1):
+                raise ValueError(f"Ratio for {split} must be between 0 and 1, got {ratio}")
+
         random.seed(random_seed)
 
         images_dir = self.structure['images']
         labels_dir = self.structure['labels']
 
-        # Get all images
-        images = [f for f in images_dir.iterdir() if self._is_image_file(f)]
+        # Get all images (SORTED for reproducibility)
+        images = sorted([f for f in images_dir.iterdir() if self._is_image_file(f)])
+
+        # Check for empty dataset
+        if not images:
+            raise ValueError("No images found in dataset. Cannot split empty dataset.")
+
+        if len(images) < 3:
+            raise ValueError(f"Need at least 3 images to split, found only {len(images)}")
 
         # Shuffle images
         random.shuffle(images)

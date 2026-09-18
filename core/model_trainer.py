@@ -2,10 +2,13 @@
 Model Trainer - handles YOLO model training operations
 """
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Tuple
 import threading
 import time
 from config.settings import Settings
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class TrainingSession:
@@ -49,6 +52,12 @@ class TrainingSession:
         return end - self.start_time
 
 
+class TrainingStopped(Exception):
+    """Internal signal raised from a training callback to abort promptly
+    when the user requests a stop."""
+    pass
+
+
 class ModelTrainer:
     """Handles YOLO model training"""
 
@@ -58,11 +67,13 @@ class ModelTrainer:
         self.training_thread: Optional[threading.Thread] = None
         self.stop_flag = threading.Event()
         self.pause_flag = threading.Event()
+        self.session_lock = threading.Lock()  # Thread safety for session access
         self.callbacks = {
             'on_epoch_end': [],
             'on_train_start': [],
             'on_train_end': [],
-            'on_val_end': []
+            'on_val_end': [],
+            'on_train_error': []  # Add error callback
         }
 
     def register_callback(self, event: str, callback: Callable):
@@ -76,7 +87,7 @@ class ModelTrainer:
             try:
                 callback(*args, **kwargs)
             except Exception as e:
-                print(f"Error in callback for {event}: {e}")
+                logger.error(f"Error in callback for {event}: {e}", exc_info=True)
 
     def start_training(self, config: Dict[str, Any],
                       data_yaml_path: Path,
@@ -120,6 +131,49 @@ class ModelTrainer:
 
         return self.current_session
 
+    def _validate_config(self, config: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Validate training configuration
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        # Check epochs
+        epochs = config.get('epochs', 0)
+        if epochs <= 0:
+            return False, f"Epochs must be positive, got {epochs}"
+
+        if epochs > 10000:
+            return False, f"Epochs too large ({epochs}), maximum is 10000"
+
+        # Check batch size
+        batch = config.get('batch', 0)
+        if batch <= 0:
+            return False, f"Batch size must be positive, got {batch}"
+
+        # Check image size (must be divisible by 32 for YOLO)
+        imgsz = config.get('imgsz', 640)
+        if imgsz % 32 != 0:
+            return False, f"Image size must be divisible by 32, got {imgsz}"
+
+        if imgsz < 32 or imgsz > 2048:
+            return False, f"Image size must be between 32 and 2048, got {imgsz}"
+
+        # Check learning rate
+        lr0 = config.get('lr0', 0.01)
+        if not (0 < lr0 < 1):
+            return False, f"Learning rate must be between 0 and 1, got {lr0}"
+
+        # Check data file exists
+        data_file = Path(config.get('data', ''))
+        if not data_file.exists():
+            return False, f"Data file not found: {data_file}"
+
+        # Check patience
+        patience = config.get('patience', 50)
+        if patience < 0:
+            return False, f"Patience must be non-negative, got {patience}"
+
+        return True, None
+
     def _prepare_training_config(self, config: Dict[str, Any],
                                  data_yaml_path: Path,
                                  model_name: str) -> Dict[str, Any]:
@@ -141,44 +195,119 @@ class ModelTrainer:
         if not train_config.get('name'):
             train_config['name'] = f"exp_{int(time.time())}"
 
+        # Validate configuration
+        valid, error_msg = self._validate_config(train_config)
+        if not valid:
+            raise ValueError(f"Invalid training configuration: {error_msg}")
+
         return train_config
+
+    def _preflight_checks(self, config: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Pre-flight checks before training to catch issues early
+        Returns:
+            Tuple of (is_ok, error_message)
+        """
+        import shutil
+
+        # Check disk space (need at least 2GB free for training)
+        project_dir = Path(config.get('project', self.project_path / 'runs' / 'train'))
+        check_dir = project_dir.parent if project_dir.parent.exists() else Path.home()
+        try:
+            stat = shutil.disk_usage(check_dir)
+            free_gb = stat.free / (1024**3)
+            if free_gb < 2:
+                return False, f"Insufficient disk space: {free_gb:.1f}GB free, need at least 2GB"
+        except Exception as e:
+            logger.warning(f"Could not check disk space: {e}")
+
+        # Check CUDA availability if GPU device specified
+        device = str(config.get('device', '')).lower()
+        if device and device not in ('', 'cpu'):
+            try:
+                import torch
+                if not torch.cuda.is_available():
+                    return False, "GPU device specified but CUDA is not available. Use 'cpu' or install CUDA."
+
+                # Warn if batch size might be too large
+                if torch.cuda.is_available():
+                    gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    batch = config.get('batch', 16)
+                    imgsz = config.get('imgsz', 640)
+
+                    # Rough estimate of GPU memory needed (heuristic)
+                    estimated_gb = (batch * (imgsz / 640) ** 2) * 0.3
+                    if estimated_gb > gpu_mem_gb * 0.85 and batch > 0:
+                        logger.warning(f"Batch size {batch} at {imgsz}px may exceed GPU memory "
+                                      f"({gpu_mem_gb:.1f}GB). Consider reducing batch size.")
+            except ImportError:
+                logger.warning("torch not available for GPU checks")
+            except Exception as e:
+                logger.warning(f"Could not check GPU: {e}")
+
+        return True, None
 
     def _train_worker(self, config: Dict[str, Any]):
         """Worker function for training"""
         try:
             from ultralytics import YOLO
 
+            # Run pre-flight checks
+            ok, error_msg = self._preflight_checks(config)
+            if not ok:
+                raise RuntimeError(f"Pre-flight check failed: {error_msg}")
+
             self.current_session.status = 'running'
             self.current_session.start_time = time.time()
 
             self._trigger_callbacks('on_train_start', self.current_session)
 
-            # Load model
-            model = YOLO(config['model'])
+            # Separate model path from config (it's not a train() parameter)
+            train_kwargs = config.copy()
+            model_path = train_kwargs.pop('model', 'yolov8n.pt')
 
-            # Add custom callbacks to YOLO trainer
+            # Load model
+            model = YOLO(model_path)
+
+            # ── Control: honour pause/stop across the whole run ──────────
+            def _check_control(trainer=None):
+                """Block while paused; abort promptly when Stop is requested.
+
+                Registered on several Ultralytics events (including early
+                ones) so a Stop press is acted on during initialization and
+                within an epoch, not only at epoch boundaries."""
+                while self.pause_flag.is_set() and not self.stop_flag.is_set():
+                    time.sleep(0.3)
+                if self.stop_flag.is_set():
+                    if trainer is not None:
+                        trainer.stop = True          # graceful signal to YOLO
+                    raise TrainingStopped()          # immediate abort
+
             def on_train_epoch_end(trainer):
                 """Called at end of each training epoch"""
-                if self.stop_flag.is_set():
-                    trainer.stop = True
-                    return
+                _check_control(trainer)
 
-                # Handle pause
-                while self.pause_flag.is_set():
-                    time.sleep(0.5)
-                    if self.stop_flag.is_set():
-                        trainer.stop = True
-                        return
-
-                # Update session
-                self.current_session.current_epoch = trainer.epoch + 1
-
-                # Extract metrics
+                # Extract metrics.
+                # Use trainer.tloss (running mean over the whole epoch) rather
+                # than trainer.loss_items (the last batch only). loss_items is
+                # a single noisy sample, which made the live chart swing even
+                # when training was converging smoothly; tloss is also the
+                # value Ultralytics writes to results.csv, so the live chart
+                # and the Results dialog now agree.
                 metrics = {}
-                if hasattr(trainer, 'loss_items'):
-                    loss = trainer.loss_items
-                    if loss is not None and len(loss) > 0:
-                        metrics['train_loss'] = float(loss[0]) if len(loss) > 0 else 0.0
+                loss = getattr(trainer, 'tloss', None)
+                if loss is None:
+                    loss = getattr(trainer, 'loss_items', None)
+                if loss is not None:
+                    try:
+                        # tloss is (box, cls, dfl) for detection; index 0 is
+                        # box_loss, matching results.csv 'train/box_loss'.
+                        if hasattr(loss, '__len__'):
+                            if len(loss) > 0:
+                                metrics['train_loss'] = float(loss[0])
+                        else:
+                            metrics['train_loss'] = float(loss)
+                    except (TypeError, ValueError) as e:
+                        logger.debug(f"Could not read training loss: {e}")
 
                 if hasattr(trainer, 'metrics') and trainer.metrics:
                     results = trainer.metrics
@@ -189,15 +318,24 @@ class ModelTrainer:
                         'mAP50-95': float(results.get('metrics/mAP50-95(B)', 0.0)),
                     })
 
-                self.current_session.update_metrics(metrics)
+                # Update session (thread-safe)
+                with self.session_lock:
+                    self.current_session.current_epoch = trainer.epoch + 1
+                    self.current_session.update_metrics(metrics)
+
                 self._trigger_callbacks('on_epoch_end', self.current_session, metrics)
 
-            # Register callback with YOLO model
+            # Register callbacks. The early events let a Stop pressed during
+            # setup take effect as soon as possible; on_train_batch_end makes
+            # stopping responsive within a long epoch.
+            model.add_callback('on_pretrain_routine_end', lambda t: _check_control(t))
+            model.add_callback('on_train_start', lambda t: _check_control(t))
+            model.add_callback('on_train_batch_end', lambda t: _check_control(t))
             model.add_callback('on_train_epoch_end', on_train_epoch_end)
 
-            # Train model
+            # Train model (use train_kwargs which has 'model' removed)
             results = model.train(
-                **config,
+                **train_kwargs,
                 verbose=True,
                 plots=True,
             )
@@ -212,13 +350,18 @@ class ModelTrainer:
 
             self._trigger_callbacks('on_train_end', self.current_session, results)
 
+        except TrainingStopped:
+            # User pressed Stop - end cleanly instead of reporting an error
+            self.current_session.status = 'stopped'
+            self.current_session.end_time = time.time()
+            logger.info("Training stopped by user request")
+            self._trigger_callbacks('on_train_end', self.current_session, None)
+
         except Exception as e:
             self.current_session.status = 'failed'
             self.current_session.end_time = time.time()
             error_msg = f"Training failed: {e}"
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
+            logger.error(error_msg, exc_info=True)
             self._trigger_callbacks('on_train_error', error_msg)
 
     def pause_training(self):
@@ -245,19 +388,20 @@ class ModelTrainer:
                 self.current_session.status in ['running', 'paused'])
 
     def get_current_metrics(self) -> Dict[str, Any]:
-        """Get current training metrics"""
-        if self.current_session is None:
-            return {}
+        """Get current training metrics (thread-safe)"""
+        with self.session_lock:
+            if self.current_session is None:
+                return {}
 
-        return {
-            'epoch': self.current_session.current_epoch,
-            'total_epochs': self.current_session.total_epochs,
-            'progress': self.current_session.get_progress(),
-            'elapsed_time': self.current_session.get_elapsed_time(),
-            'status': self.current_session.status,
-            'metrics': self.current_session.metrics,
-            'best_metrics': self.current_session.best_metrics
-        }
+            return {
+                'epoch': self.current_session.current_epoch,
+                'total_epochs': self.current_session.total_epochs,
+                'progress': self.current_session.get_progress(),
+                'elapsed_time': self.current_session.get_elapsed_time(),
+                'status': self.current_session.status,
+                'metrics': self.current_session.metrics.copy(),  # Return copy for safety
+                'best_metrics': self.current_session.best_metrics.copy() if self.current_session.best_metrics else {}
+            }
 
     def resume_from_checkpoint(self, checkpoint_path: Path,
                               config: Dict[str, Any] = None) -> TrainingSession:
@@ -310,7 +454,7 @@ class ModelTrainer:
             return metrics
 
         except Exception as e:
-            print(f"Validation failed: {e}")
+            logger.error(f"Validation failed: {e}", exc_info=True)
             return {}
 
     def get_training_history(self) -> Dict[str, list]:

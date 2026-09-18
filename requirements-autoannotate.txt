@@ -1,0 +1,15 @@
+# Optional: Zero-Shot Auto-Annotation (Grounding DINO via Autodistill)
+# --------------------------------------------------------------------------
+# NOT required for the main application. Install only if you want to use
+# Dataset > Auto-Annotate (Zero-Shot)... to pre-label images automatically
+# from text prompts, before training your own YOLO model.
+#
+#   pip install -r requirements-autoannotate.txt
+#
+# Heavy: pulls in PyTorch + the GroundingDINO weights (downloaded on first
+# use). A CUDA GPU is strongly recommended - CPU inference works but is
+# slow (several seconds per image).
+# --------------------------------------------------------------------------
+autodistill>=0.1.0
+autodistill-grounding-dino>=0.1.0
+supervision>=0.20.0

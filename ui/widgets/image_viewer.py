@@ -25,6 +25,7 @@ class ImageViewer(QWidget):
     polygon_added = pyqtSignal(list, int)  # points, class_id
     annotation_selected = pyqtSignal(int)  # annotation index (-1 = deselect)
     annotation_updated = pyqtSignal(int)   # annotation index that was moved/resized
+    annotation_delete_requested = pyqtSignal(int)  # index to delete (Delete key)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,6 +35,9 @@ class ImageViewer(QWidget):
         self.current_class = 0
         self.class_colors = {}
         self.class_names = []
+
+        # Accept keyboard focus so arrow keys / Delete reach keyPressEvent
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # Drawing state
         self.annotation_mode = "box"  # "box" or "polygon"
@@ -652,8 +656,35 @@ class ImageViewer(QWidget):
             self.finish_polygon()
 
     def keyPressEvent(self, event):
-        """Handle Escape to cancel drawing or deselect"""
-        if event.key() == Qt.Key.Key_Escape:
+        """Arrow keys nudge the selected annotation, Delete removes it,
+        Escape cancels drawing or deselects."""
+        key = event.key()
+
+        # Arrow keys move the selected annotation (hold Shift for a larger step)
+        if self.selected_annotation >= 0 and key in (
+            Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down
+        ):
+            step = 10 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1
+            dx = (-step if key == Qt.Key.Key_Left
+                  else step if key == Qt.Key.Key_Right else 0)
+            dy = (-step if key == Qt.Key.Key_Up
+                  else step if key == Qt.Key.Key_Down else 0)
+            if self._nudge_annotation(self.selected_annotation, dx, dy):
+                self.annotation_updated.emit(self.selected_annotation)
+                self.update_display()
+            event.accept()
+            return
+
+        # Delete / Backspace removes the selected annotation
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selected_annotation >= 0:
+            idx = self.selected_annotation
+            self.selected_annotation = -1
+            self._edit_action = None
+            self.annotation_delete_requested.emit(idx)
+            event.accept()
+            return
+
+        if key == Qt.Key.Key_Escape:
             if self.drawing:
                 # Cancel current drawing
                 self.drawing = False
@@ -668,6 +699,37 @@ class ImageViewer(QWidget):
                 self.annotation_selected.emit(-1)
                 self.update_display()
         super().keyPressEvent(event)
+
+    def _nudge_annotation(self, idx, dx_px, dy_px):
+        """Move an annotation by a pixel delta, kept within the image bounds.
+        Returns True if the annotation changed."""
+        if not (0 <= idx < len(self.annotations)) or self.pixmap is None:
+            return False
+        img_w, img_h = self.pixmap.width(), self.pixmap.height()
+        if img_w <= 0 or img_h <= 0:
+            return False
+
+        ann = self.annotations[idx]
+        dx = dx_px / img_w
+        dy = dy_px / img_h
+        ann_type = getattr(ann, 'annotation_type', None)
+
+        if ann_type == 'box':
+            half_w, half_h = ann.width / 2, ann.height / 2
+            ann.x_center = min(1 - half_w, max(half_w, ann.x_center + dx))
+            ann.y_center = min(1 - half_h, max(half_h, ann.y_center + dy))
+            return True
+
+        if ann_type == 'polygon' and ann.points:
+            xs = [p[0] for p in ann.points]
+            ys = [p[1] for p in ann.points]
+            # Clamp the shift so the whole polygon stays inside the image
+            dx = min(max(dx, -min(xs)), 1 - max(xs))
+            dy = min(max(dy, -min(ys)), 1 - max(ys))
+            ann.points = [(x + dx, y + dy) for x, y in ann.points]
+            return True
+
+        return False
 
     # ─── Annotation Editing Helpers ──────────────────────────────
 

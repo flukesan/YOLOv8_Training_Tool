@@ -5,6 +5,17 @@ opencv-contrib-python>=4.8.0
 Pillow>=10.0.0
 
 # Deep Learning
+# --------------------------------------------------------------------------
+# GPU users: a plain `pip install torch` can resolve to a CPU-only build,
+# which makes torch.cuda.is_available() return False even with an NVIDIA GPU.
+# To use the GPU, install the CUDA build explicitly:
+#
+#   pip uninstall -y torch torchvision
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# (cu124 = CUDA 12.x; use cu118 for older drivers - match your `nvidia-smi`.)
+# Verify with:  python -c "import torch; print(torch.cuda.is_available())"
+# --------------------------------------------------------------------------
 torch>=2.0.0
 torchvision>=0.15.0
 onnx>=1.14.0
@@ -30,6 +41,16 @@ PyYAML>=6.0
 tqdm>=4.65.0
 python-dotenv>=1.0.0
 
-# Export formats
-tensorrt>=8.6.0; platform_system == "Linux"
+# Export formats (OPTIONAL)
+# --------------------------------------------------------------------------
+# TensorRT is only needed to export a model to the .engine format. Its newer
+# wheels download multi-GB CUDA libraries during install (this is what makes
+# `pip install` appear to hang at "Preparing metadata"), and Ultralytics will
+# install a matching TensorRT automatically when you actually export to
+# engine format. It is therefore left commented out here. To enable it, first
+# uncomment and match the CUDA version to your driver (see `nvidia-smi`):
+#
+#   pip install tensorrt        # or: tensorrt-cu12 for a CUDA 12.x driver
+#
+# tensorrt>=8.6.0; platform_system == "Linux"
 coremltools>=7.0; platform_system == "Darwin"

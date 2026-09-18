@@ -18,6 +18,9 @@ class DatasetWidget(QWidget):
         self.images = []
         self.class_names = []
         self.class_colors = {}
+        # Row to auto-select the next time set_images() refreshes the list
+        # (e.g. after a delete) - None means no pending auto-select.
+        self._pending_select_row = None
         self.init_ui()
 
     def init_ui(self):
@@ -40,7 +43,9 @@ class DatasetWidget(QWidget):
         # Image list
         self.image_list = QListWidget()
         self.image_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.image_list.itemClicked.connect(self._on_image_selected)
+        # currentRowChanged fires for both mouse clicks AND keyboard arrows (Up/Down),
+        # so navigating with the keyboard updates the displayed image too.
+        self.image_list.currentRowChanged.connect(self._on_row_changed)
         layout.addWidget(self.image_list)
 
         # Annotation summary for current image
@@ -91,8 +96,11 @@ class DatasetWidget(QWidget):
         self.btn_delete.clicked.connect(self._on_delete)
         layout.addWidget(self.btn_delete)
 
-        # Keyboard shortcut
+        # Keyboard shortcut - scoped to this widget so Delete only removes
+        # images when the Dataset panel has focus (avoids clashing with the
+        # annotation list's Delete, which removes the selected annotation).
         self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self._on_delete)
 
         self.setLayout(layout)
@@ -149,6 +157,21 @@ class DatasetWidget(QWidget):
             self.image_list.addItem(img.name)
 
         self.count_label.setText(f"{len(images)} images")
+
+        # If a delete (or similar refresh) requested auto-selecting a row,
+        # do it now that the list is repopulated - triggers
+        # currentRowChanged -> the next image loads automatically.
+        if self._pending_select_row is not None:
+            row = self._pending_select_row
+            self._pending_select_row = None
+            if self.image_list.count() > 0:
+                row = min(row, self.image_list.count() - 1)
+                self.image_list.setCurrentRow(row)
+                # Move keyboard focus onto the list itself (it was on the
+                # Delete button that triggered this) so Up/Down immediately
+                # move between images without an extra click first.
+                self.image_list.setFocus()
+                return
         self._update_position()
 
     def _update_position(self):
@@ -160,9 +183,8 @@ class DatasetWidget(QWidget):
         else:
             self.pos_label.setText(f"- / {total}")
 
-    def _on_image_selected(self, item):
-        """Handle image selection"""
-        index = self.image_list.row(item)
+    def _on_row_changed(self, index):
+        """Handle image selection via mouse click or keyboard arrows (Up/Down)"""
         if 0 <= index < len(self.images):
             self.image_selected.emit(str(self.images[index]))
             self._update_position()
@@ -171,15 +193,15 @@ class DatasetWidget(QWidget):
         """Navigate to previous image"""
         current = self.image_list.currentRow()
         if current > 0:
+            # setCurrentRow triggers currentRowChanged -> _on_row_changed
             self.image_list.setCurrentRow(current - 1)
-            self._on_image_selected(self.image_list.currentItem())
 
     def _on_next(self):
         """Navigate to next image"""
         current = self.image_list.currentRow()
         if current < self.image_list.count() - 1:
+            # setCurrentRow triggers currentRowChanged -> _on_row_changed
             self.image_list.setCurrentRow(current + 1)
-            self._on_image_selected(self.image_list.currentItem())
 
     def _on_delete(self):
         """Handle delete images"""
@@ -201,4 +223,10 @@ class DatasetWidget(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             selected_indices = [self.image_list.row(item) for item in selected_items]
             selected_images = [self.images[i] for i in selected_indices if i < len(self.images)]
+
+            # After the list is refreshed (set_images(), called by the
+            # deletion handler), auto-select the image that will have
+            # slid into the lowest deleted row - i.e. the "next" image.
+            self._pending_select_row = min(selected_indices)
+
             self.images_deleted.emit(selected_images)

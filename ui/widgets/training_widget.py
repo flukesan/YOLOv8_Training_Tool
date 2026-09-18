@@ -4,7 +4,8 @@ Training Widget - Enhanced training controls with better usability
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QSpinBox, QDoubleSpinBox, QFormLayout,
                              QGroupBox, QComboBox, QProgressBar, QCheckBox,
-                             QScrollArea, QFrame, QToolButton, QSizePolicy)
+                             QScrollArea, QFrame, QToolButton, QSizePolicy,
+                             QMessageBox)
 from PyQt6.QtCore import pyqtSignal, Qt
 from config.settings import Settings
 
@@ -94,6 +95,22 @@ class TrainingWidget(QWidget):
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
 
+        # === High Accuracy preset (one-click recommended settings) ===
+        self.btn_high_accuracy = QPushButton("High Accuracy Preset")
+        self.btn_high_accuracy.setToolTip(
+            "Apply a curated set of settings tuned for high accuracy and a\n"
+            "smooth, steadily decreasing loss curve:\n"
+            "  • YOLOv8m model, SGD + cosine LR\n"
+            "  • close_mosaic=15 (real images near the end)\n"
+            "  • patience=100, 300 epochs, medium augmentation\n"
+            "You can still fine-tune any value afterwards."
+        )
+        self.btn_high_accuracy.setStyleSheet(
+            "QPushButton { padding: 8px 14px; border-radius: 8px; }"
+        )
+        self.btn_high_accuracy.clicked.connect(self._apply_high_accuracy_preset)
+        layout.addWidget(self.btn_high_accuracy)
+
         # === Device Info Banner ===
         self._create_device_banner(layout)
 
@@ -148,7 +165,7 @@ class TrainingWidget(QWidget):
         # Epochs
         default_params = Settings.DEFAULT_TRAIN_PARAMS
         self.epochs_spin = QSpinBox()
-        self.epochs_spin.setRange(1, 1000)
+        self.epochs_spin.setRange(1, 4000)
         self.epochs_spin.setValue(default_params.get('epochs', 100))
         self.epochs_spin.setToolTip(
             "Number of training epochs.\n"
@@ -263,122 +280,107 @@ class TrainingWidget(QWidget):
         )
         strategy_section.add_row("", self.cos_lr_check)
 
+        # Close mosaic (disable mosaic augmentation for the final N epochs)
+        self.close_mosaic_spin = QSpinBox()
+        self.close_mosaic_spin.setRange(0, 100)
+        self.close_mosaic_spin.setValue(default_params.get('close_mosaic', 10))
+        self.close_mosaic_spin.setSpecialValueText("Disabled (0)")
+        self.close_mosaic_spin.setToolTip(
+            "Disable mosaic augmentation for the last N epochs.\n"
+            "Lets the model train on real (un-mosaicked) images near the\n"
+            "end, which smooths the loss tail and usually improves final\n"
+            "accuracy. Default 10. Set to 0 to keep mosaic on the whole time."
+        )
+        strategy_section.add_row("Close Mosaic (last N):", self.close_mosaic_spin)
+
+        # Add the strategy section to the layout
         layout.addWidget(strategy_section)
 
-        # === Advanced Options (collapsible) ===
-        advanced_section = CollapsibleSection("Advanced Options")
+        # === Advanced/System Settings (collapsible) ===
+        advanced_section = CollapsibleSection("Advanced/System Settings")
 
-        # Device selection
+        # Device selector
         self.device_combo = QComboBox()
-        self.device_combo.addItem(
-            f"Auto ({self._detected_device['recommended']})", ''
-        )
-        if self._detected_device['has_cuda']:
-            for i in range(self._detected_device['cuda_count']):
-                try:
-                    import torch
-                    name = torch.cuda.get_device_name(i)
-                    self.device_combo.addItem(f"GPU {i}: {name}", str(i))
-                except Exception:
-                    self.device_combo.addItem(f"GPU {i}", str(i))
-        self.device_combo.addItem("CPU (slow)", 'cpu')
+        self.device_combo.addItem("Auto-detect", "")
+        self.device_combo.addItem("CPU", "cpu")
+        if self._detected_device.get('has_cuda'):
+            for i in range(self._detected_device.get('cuda_count', 0)):
+                self.device_combo.addItem(f"GPU {i}", str(i))
         self.device_combo.setToolTip(
             "Compute device for training.\n"
-            "GPU is strongly recommended for reasonable training speed."
+            "Auto-detect uses GPU if available, else CPU."
         )
         advanced_section.add_row("Device:", self.device_combo)
 
         # Workers
+        import os
+        cpu_count = os.cpu_count() or 4
         self.workers_spin = QSpinBox()
-        self.workers_spin.setRange(0, 32)
-        self.workers_spin.setValue(default_params.get('workers', 8))
+        self.workers_spin.setRange(0, max(16, cpu_count))
+        self.workers_spin.setValue(min(8, max(1, cpu_count - 1)))
         self.workers_spin.setToolTip(
-            "Number of data loading workers.\n"
-            "More workers = faster data loading.\n"
-            "Set to 0 if you experience data loading issues."
+            "Number of data loader worker threads.\n"
+            "More workers = faster data loading but more RAM/CPU.\n"
+            "Recommended: CPU cores - 1"
         )
-        advanced_section.add_row("Data Workers:", self.workers_spin)
+        advanced_section.add_row("Workers:", self.workers_spin)
 
-        # Cache
+        # Cache mode
         self.cache_combo = QComboBox()
-        cache_options = [
-            ('None - Load from disk each time', 'none'),
-            ('RAM - Cache in memory (fastest, needs RAM)', 'ram'),
-            ('Disk - Cache on disk', 'disk'),
-        ]
-        for label, value in cache_options:
-            self.cache_combo.addItem(label, value)
+        self.cache_combo.addItem("None (default)", "none")
+        self.cache_combo.addItem("RAM (fastest, high memory)", "ram")
+        self.cache_combo.addItem("Disk (faster, more disk usage)", "disk")
         self.cache_combo.setToolTip(
-            "Dataset caching:\n"
-            "  None: Read from disk (default, lowest memory)\n"
-            "  RAM: Cache in memory (fast, but needs lots of RAM)\n"
-            "  Disk: Cache to disk (balance)"
+            "Cache strategy for dataset images:\n"
+            "  None: Read from disk each epoch\n"
+            "  RAM: Load all images to memory (fastest)\n"
+            "  Disk: Cache pre-processed images on disk"
         )
         advanced_section.add_row("Cache:", self.cache_combo)
 
-        # AMP
-        self.amp_check = QCheckBox("Mixed Precision Training (AMP)")
-        self.amp_check.setChecked(default_params.get('amp', True))
+        # AMP (mixed precision)
+        self.amp_check = QCheckBox("Use Automatic Mixed Precision (AMP)")
+        self.amp_check.setChecked(True)
         self.amp_check.setToolTip(
-            "Automatic Mixed Precision.\n"
-            "Speeds up training and reduces GPU memory usage.\n"
-            "Recommended to keep enabled."
+            "Use FP16 mixed precision training.\n"
+            "Faster training and less GPU memory on modern GPUs."
         )
         advanced_section.add_row("", self.amp_check)
 
         # Multi-scale
-        self.multiscale_check = QCheckBox("Multi-scale Training")
+        self.multiscale_check = QCheckBox("Multi-scale training")
         self.multiscale_check.setToolTip(
-            "Vary input image size during training.\n"
-            "Can improve model robustness at different scales."
+            "Randomly vary image size during training (+/- 50%).\n"
+            "Improves robustness to different input sizes."
         )
         advanced_section.add_row("", self.multiscale_check)
 
-        # Freeze backbone
+        # Freeze layers
         self.freeze_spin = QSpinBox()
         self.freeze_spin.setRange(0, 24)
         self.freeze_spin.setValue(0)
-        self.freeze_spin.setSpecialValueText("None (0)")
+        self.freeze_spin.setSpecialValueText("None")
         self.freeze_spin.setToolTip(
-            "Number of backbone layers to freeze.\n"
-            "Useful for transfer learning / fine-tuning.\n"
-            "Set to 0 to train all layers (default).\n"
-            "Set to 10 to freeze the backbone (faster training)."
+            "Number of backbone layers to freeze (transfer learning).\n"
+            "0 = train all layers (default)\n"
+            "10 = freeze first 10 layers (faster fine-tuning)"
         )
         advanced_section.add_row("Freeze Layers:", self.freeze_spin)
 
-        # Seed
+        # Random seed
         self.seed_spin = QSpinBox()
         self.seed_spin.setRange(0, 99999)
-        self.seed_spin.setValue(default_params.get('seed', 0))
-        self.seed_spin.setToolTip("Random seed for reproducibility.")
+        self.seed_spin.setValue(0)
+        self.seed_spin.setToolTip(
+            "Random seed for reproducible training.\n"
+            "Same seed + same data = same results."
+        )
         advanced_section.add_row("Random Seed:", self.seed_spin)
 
+        # Add the advanced section to the layout
         layout.addWidget(advanced_section)
 
-        # === Progress Section ===
-        progress_group = QGroupBox("Training Progress")
-        progress_layout = QVBoxLayout()
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("Ready")
-        progress_layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel("Ready to train")
-        self.status_label.setStyleSheet("color: #888;")
-        progress_layout.addWidget(self.status_label)
-
-        self.eta_label = QLabel("")
-        self.eta_label.setStyleSheet("color: #888; font-size: 11px;")
-        progress_layout.addWidget(self.eta_label)
-
-        progress_group.setLayout(progress_layout)
-        layout.addWidget(progress_group)
-
-        # === Control Buttons ===
+        # === Buttons ===
         btn_layout = QHBoxLayout()
 
         self.btn_start = QPushButton("Start Training")
@@ -414,6 +416,24 @@ class TrainingWidget(QWidget):
         btn_layout.addWidget(self.btn_stop)
 
         layout.addLayout(btn_layout)
+
+        # === Progress Bar ===
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Ready")
+        self.progress_bar.setTextVisible(True)
+        layout.addWidget(self.progress_bar)
+
+        # === Status Label ===
+        self.status_label = QLabel("Ready to train")
+        self.status_label.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(self.status_label)
+
+        # === ETA Label ===
+        self.eta_label = QLabel("")
+        self.eta_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self.eta_label)
 
         layout.addStretch()
         container.setLayout(layout)
@@ -474,7 +494,8 @@ class TrainingWidget(QWidget):
             ctrl.setEnabled(enabled)
 
     def _on_start(self):
-        """Handle start training - collect all config"""
+        """Handle start training"""
+        # Use get_training_config to collect all parameters consistently
         config = self.get_training_config()
         self.start_training.emit(config)
         self.btn_start.setEnabled(False)
@@ -501,6 +522,50 @@ class TrainingWidget(QWidget):
             self.status_label.setStyleSheet("color: #FF9800;")
             self._is_paused = True
 
+    @staticmethod
+    def _select_combo_by_data(combo, data):
+        """Select the combo entry whose userData equals `data` (no-op if absent)."""
+        for i in range(combo.count()):
+            if combo.itemData(i) == data:
+                combo.setCurrentIndex(i)
+                return True
+        return False
+
+    def _apply_high_accuracy_preset(self):
+        """Set a curated configuration tuned for accuracy + smooth loss."""
+        # Model / input
+        self._select_combo_by_data(self.model_combo,
+                                   Settings.YOLO_MODELS.get('YOLOv8m'))
+        self._select_combo_by_data(self.imgsz_combo, 640)
+
+        # Schedule
+        self.epochs_spin.setValue(300)
+        self.patience_spin.setValue(100)
+        self._select_combo_by_data(self.optimizer_combo, 'SGD')
+        self.lr_spin.setValue(0.01)
+        self.cos_lr_check.setChecked(True)
+        self.close_mosaic_spin.setValue(15)
+        self.amp_check.setChecked(True)
+
+        # Balanced augmentation - strong enough to generalise, calm enough
+        # to keep the loss curve smooth.
+        self._select_combo_by_data(self.aug_combo, 'medium')
+
+        QMessageBox.information(
+            self, "High Accuracy Preset Applied",
+            "Applied recommended settings:\n\n"
+            "• Model: YOLOv8m\n"
+            "• Optimizer: SGD + Cosine LR\n"
+            "• Epochs: 300, Patience: 100\n"
+            "• Close Mosaic: 15 (smoother loss tail)\n"
+            "• Augmentation: Medium, AMP: on\n\n"
+            "Tips to reach mAP 95%+ / Recall 90%+:\n"
+            "• 300-500+ well-labelled images per class\n"
+            "• Annotate EVERY object (missed labels hurt recall)\n"
+            "• Balance the number of images across classes\n"
+            "• If small objects are missed, raise Image Size to 960"
+        )
+
     def get_training_config(self) -> dict:
         """Collect all training configuration into a dictionary"""
         config = {
@@ -512,6 +577,7 @@ class TrainingWidget(QWidget):
             'optimizer': self.optimizer_combo.currentData(),
             'patience': self.patience_spin.value(),
             'cos_lr': self.cos_lr_check.isChecked(),
+            'close_mosaic': self.close_mosaic_spin.value(),
             'amp': self.amp_check.isChecked(),
             'multi_scale': self.multiscale_check.isChecked(),
             'workers': self.workers_spin.value(),
@@ -570,6 +636,8 @@ class TrainingWidget(QWidget):
             self.patience_spin.setValue(config['patience'])
         if 'cos_lr' in config:
             self.cos_lr_check.setChecked(config['cos_lr'])
+        if 'close_mosaic' in config:
+            self.close_mosaic_spin.setValue(config['close_mosaic'])
         if 'amp' in config:
             self.amp_check.setChecked(config['amp'])
         if 'multi_scale' in config:

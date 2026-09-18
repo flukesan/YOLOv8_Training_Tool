@@ -7,6 +7,11 @@ from typing import Dict, Any
 import yaml
 
 
+# Safe worker count (don't exceed CPU cores)
+_cpu_count = os.cpu_count() or 1
+_safe_workers = min(8, max(1, _cpu_count - 1))  # Leave 1 core free
+
+
 class Settings:
     """Application settings manager"""
 
@@ -39,6 +44,7 @@ class Settings:
         'warmup_bias_lr': 0.1,
         'optimizer': 'SGD',
         'cos_lr': False,
+        'close_mosaic': 10,       # Disable mosaic aug for the last N epochs (smoother tail)
         'amp': True,
         'fraction': 1.0,
         'profile': False,
@@ -49,12 +55,14 @@ class Settings:
         'resume': False,
         'cache': None,
         'device': '',
-        'workers': 8,
+        'workers': _safe_workers,  # Auto-adjust to CPU count
         'project': None,
         'name': None,
         'exist_ok': False,
         'save_period': -1,
         'seed': 0,
+        # Note: 'plots' is passed explicitly in model_trainer.train(), so it
+        # must NOT be duplicated here (would raise "multiple values for 'plots'").
         # Removed deprecated parameters: nosave, noval, noautoanchor, noplots,
         # evolve, bucket, image_weights, quad, linear_lr, local_rank, label_smoothing
     }
@@ -144,8 +152,9 @@ class Settings:
     # Supported annotation formats
     ANNOTATION_FORMATS = ['yolo', 'coco', 'voc', 'labelme']
 
-    # Export formats
-    EXPORT_FORMATS = ['pt', 'onnx', 'tflite', 'torchscript', 'coreml', 'tfjs']
+    # Export formats (all supported formats)
+    EXPORT_FORMATS = ['pt', 'onnx', 'tflite', 'torchscript', 'coreml', 'tfjs',
+                      'engine', 'paddle', 'ncnn']
 
     # UI settings
     UI_SETTINGS = {
@@ -195,8 +204,8 @@ class Settings:
     # Keys that should be persisted in training config
     TRAINING_CONFIG_KEYS = [
         'model', 'epochs', 'batch', 'imgsz', 'lr0', 'optimizer',
-        'patience', 'cos_lr', 'amp', 'multi_scale', 'workers', 'seed',
-        'device', 'cache', 'freeze',
+        'patience', 'cos_lr', 'close_mosaic', 'amp', 'multi_scale',
+        'workers', 'seed', 'device', 'cache', 'freeze',
     ]
 
     @classmethod
@@ -279,5 +288,5 @@ class Settings:
             (structure[split] / 'labels').mkdir(parents=True, exist_ok=True)
 
 
-# Initialize default directories on import
-Settings.create_default_directories()
+# Don't auto-create directories on import - let main.py do it explicitly
+# This allows better error handling and clearer startup sequence
