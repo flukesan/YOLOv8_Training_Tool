@@ -15,10 +15,11 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QDoubleSpinBox, QCheckBox, QGroupBox, QProgressBar,
                              QTextEdit, QMessageBox, QHeaderView, QScrollArea,
                              QWidget, QFrame)
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from core.zero_shot_annotator import (ZeroShotAnnotator, is_available,
                                       get_availability_message)
+from ui.widgets.training_widget import CollapsibleSection
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -97,6 +98,14 @@ class AutoAnnotateDialog(QDialog):
         self.default_output.mkdir(parents=True, exist_ok=True)
 
         self.setWindowTitle("Auto-Annotate (Zero-Shot)")
+        # A plain QDialog has no minimize/maximize buttons; add them so the
+        # window can be resized to full screen when the lists get long.
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
         # Roomy enough that nothing is clipped, but the setup column also
         # scrolls so the dialog still works on a short screen.
         self.setMinimumSize(900, 560)
@@ -142,6 +151,11 @@ class AutoAnnotateDialog(QDialog):
         setup_scroll = QScrollArea()
         setup_scroll.setWidgetResizable(True)
         setup_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # No sideways scrolling: the content must fit the viewport width,
+        # otherwise the right-hand column of the ontology table (the remove
+        # button) ends up pushed outside the visible area.
+        setup_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         setup_scroll.setWidget(setup_container)
         setup_scroll.setMinimumWidth(420)
         body.addWidget(setup_scroll, 3)
@@ -220,15 +234,19 @@ class AutoAnnotateDialog(QDialog):
 
         self.ont_table = QTableWidget(0, 3)
         self.ont_table.setHorizontalHeaderLabels(
-            ["Caption (prompt)", "Class name", ""])
+            ["Caption (prompt)", "Class name", "Remove"])
         self.ont_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch)
         self.ont_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch)
         self.ont_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Fixed)
-        self.ont_table.setColumnWidth(2, 36)
+        self.ont_table.setColumnWidth(2, 72)
         self.ont_table.horizontalHeader().setStretchLastSection(False)
+        # The two stretch columns shrink to fit, so the Remove column is
+        # always reachable instead of being scrolled out of view.
+        self.ont_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.ont_table.verticalHeader().setVisible(False)
         self.ont_table.setMinimumHeight(180)
         ont_layout.addWidget(self.ont_table)
@@ -241,12 +259,10 @@ class AutoAnnotateDialog(QDialog):
         ont_group.setLayout(ont_layout)
         col.addWidget(ont_group)
 
-        # Thresholds
-        thresh_group = QGroupBox("Thresholds")
-        t_layout = QVBoxLayout()
+        # Thresholds - collapsible, so the ontology table can have the room
+        # when these are left at their defaults.
+        thresh_section = CollapsibleSection("Thresholds")
 
-        box_row = QHBoxLayout()
-        box_row.addWidget(QLabel("Box Threshold:"))
         self.box_threshold_spin = QDoubleSpinBox()
         self.box_threshold_spin.setRange(0.0, 1.0)
         self.box_threshold_spin.setSingleStep(0.05)
@@ -255,11 +271,8 @@ class AutoAnnotateDialog(QDialog):
         self.box_threshold_spin.setToolTip(
             "Higher = fewer false positives but may miss real objects.\n"
             "Lower = catches more, but more noise (rely on NMS + review).")
-        box_row.addWidget(self.box_threshold_spin)
-        t_layout.addLayout(box_row)
+        thresh_section.add_row("Box Threshold:", self.box_threshold_spin)
 
-        text_row = QHBoxLayout()
-        text_row.addWidget(QLabel("Text Threshold:"))
         self.text_threshold_spin = QDoubleSpinBox()
         self.text_threshold_spin.setRange(0.0, 1.0)
         self.text_threshold_spin.setSingleStep(0.05)
@@ -267,43 +280,47 @@ class AutoAnnotateDialog(QDialog):
         self.text_threshold_spin.setValue(ZeroShotAnnotator.DEFAULT_TEXT_THRESHOLD)
         self.text_threshold_spin.setToolTip(
             "Confidence that the caption matches what's seen in the image.")
-        text_row.addWidget(self.text_threshold_spin)
-        t_layout.addLayout(text_row)
+        thresh_section.add_row("Text Threshold:", self.text_threshold_spin)
 
-        thresh_group.setLayout(t_layout)
-        col.addWidget(thresh_group)
+        self._expand(thresh_section)
+        col.addWidget(thresh_section)
 
-        # NMS
-        nms_group = QGroupBox("NMS - Remove Overlapping Duplicate Boxes")
-        n_layout = QVBoxLayout()
+        # NMS - also collapsible
+        nms_section = CollapsibleSection("NMS - Remove Overlapping Duplicate Boxes")
 
         self.nms_check = QCheckBox("Enable NMS")
         self.nms_check.setChecked(True)
         self.nms_check.setToolTip(
             "Merges multiple boxes drawn on the same object (common when "
             "objects sit close together) into a single best box.")
-        n_layout.addWidget(self.nms_check)
+        nms_section.add_row("", self.nms_check)
 
-        iou_row = QHBoxLayout()
-        iou_row.addWidget(QLabel("IoU Threshold:"))
         self.nms_iou_spin = QDoubleSpinBox()
         self.nms_iou_spin.setRange(0.0, 1.0)
         self.nms_iou_spin.setSingleStep(0.05)
         self.nms_iou_spin.setDecimals(2)
         self.nms_iou_spin.setValue(ZeroShotAnnotator.DEFAULT_NMS_THRESHOLD)
-        iou_row.addWidget(self.nms_iou_spin)
-        n_layout.addLayout(iou_row)
+        nms_section.add_row("IoU Threshold:", self.nms_iou_spin)
 
         self.class_agnostic_check = QCheckBox(
-            "Class-agnostic (also suppress overlaps across different classes)")
+            "Class-agnostic (also across classes)")
         self.class_agnostic_check.setChecked(True)
-        n_layout.addWidget(self.class_agnostic_check)
+        self.class_agnostic_check.setToolTip(
+            "Also suppress overlapping boxes that belong to different "
+            "classes, not just duplicates of the same class.")
+        nms_section.add_row("", self.class_agnostic_check)
 
-        nms_group.setLayout(n_layout)
-        col.addWidget(nms_group)
+        self._expand(nms_section)
+        col.addWidget(nms_section)
 
         col.addStretch()
         return col
+
+    @staticmethod
+    def _expand(section: CollapsibleSection):
+        """Open a CollapsibleSection (they start collapsed by default)."""
+        section.toggle_button.setChecked(True)
+        section._on_toggle(True)
 
     # ---- right column: run ---------------------------------------------
     def _build_run_column(self):
@@ -389,9 +406,14 @@ class AutoAnnotateDialog(QDialog):
         class_edit.setPlaceholderText("e.g. cup")
         self.ont_table.setCellWidget(row, 1, class_edit)
 
-        btn_del = QPushButton("×")
-        btn_del.setFixedWidth(28)
+        btn_del = QPushButton("Remove")
         btn_del.setToolTip("Remove this class")
+        btn_del.setStyleSheet(
+            "QPushButton { background-color: #c0392b; color: #ffffff; "
+            "border: none; border-radius: 4px; padding: 3px 6px; "
+            "font-size: 11px; }"
+            "QPushButton:hover { background-color: #d94435; }"
+        )
         btn_del.clicked.connect(lambda: self._remove_ontology_row(btn_del))
         self.ont_table.setCellWidget(row, 2, btn_del)
 
