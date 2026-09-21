@@ -24,10 +24,17 @@ try:
     from autodistill.detection import CaptionOntology
     from autodistill_grounding_dino import GroundingDINO
     _AUTODISTILL_AVAILABLE = True
-except ImportError:
+    _IMPORT_ERROR = None
+except Exception as e:
+    # Deliberately broad: these packages pull in torch/GroundingDINO, which
+    # can fail with OSError (missing CUDA libs), RuntimeError or
+    # AttributeError (version conflicts) - not just ImportError. Keep the
+    # real reason so the UI can show it instead of a bare "not installed".
     CaptionOntology = None
     GroundingDINO = None
     _AUTODISTILL_AVAILABLE = False
+    _IMPORT_ERROR = f"{type(e).__name__}: {e}"
+    logger.warning(f"Grounding DINO unavailable - {_IMPORT_ERROR}")
 
 
 DEFAULT_EXTENSIONS = ('.jpg', '.jpeg', '.png')
@@ -38,18 +45,34 @@ def is_available() -> bool:
     return _AUTODISTILL_AVAILABLE
 
 
+def get_import_error() -> Optional[str]:
+    """The exact error that made the import fail, or None if it worked."""
+    return _IMPORT_ERROR
+
+
 def get_availability_message() -> str:
     """Status / setup instructions, for display in the UI."""
     if _AUTODISTILL_AVAILABLE:
         return "Grounding DINO: Ready"
-    return (
-        "Grounding DINO is not installed.\n\n"
+
+    import sys
+
+    message = "Grounding DINO could not be loaded.\n\n"
+    if _IMPORT_ERROR:
+        message += f"Reason: {_IMPORT_ERROR}\n\n"
+    message += (
         "To enable zero-shot auto-annotation:\n"
         "  pip install -r requirements-autoannotate.txt\n\n"
-        "This pulls in autodistill, autodistill-grounding-dino, and "
+        f"This app is running: {sys.executable}\n"
+        "If you installed into a different Python (a venv, or a system\n"
+        "Python), install it into that one - the packages must live in the\n"
+        "same interpreter that runs this app. Check with:\n"
+        f"  {sys.executable} -m pip show autodistill-grounding-dino\n\n"
+        "The install pulls in autodistill, autodistill-grounding-dino, and "
         "supervision (heavy: includes PyTorch + GroundingDINO weights, "
         "downloaded on first use). A CUDA GPU is strongly recommended."
     )
+    return message
 
 
 class ZeroShotAnnotator:
