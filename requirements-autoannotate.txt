@@ -13,3 +13,8 @@
 autodistill>=0.1.0
 autodistill-grounding-dino>=0.1.0
 supervision>=0.20.0
+
+# autodistill imports roboflow internally but does not always pull it in as
+# a dependency, which surfaces as "ModuleNotFoundError: No module named
+# 'roboflow'" the first time the annotator is loaded. Install it explicitly.
+roboflow>=1.1.0
