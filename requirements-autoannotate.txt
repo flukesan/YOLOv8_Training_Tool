@@ -18,3 +18,10 @@ supervision>=0.20.0
 # a dependency, which surfaces as "ModuleNotFoundError: No module named
 # 'roboflow'" the first time the annotator is loaded. Install it explicitly.
 roboflow>=1.1.0
+
+# GroundingDINO's bertwarper.py calls legacy BERT helpers
+# (get_extended_attention_mask, get_head_mask) that transformers 5.x
+# removed or re-signed, so loading the model fails with
+# "'BertModel' object has no attribute 'get_extended_attention_mask'".
+# Keep transformers on the 4.x line until GroundingDINO supports 5.x.
+transformers>=4.36,<5
