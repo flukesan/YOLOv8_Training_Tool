@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QMenuBar, QFileDialog, QMessageBox, QSplitter,
                              QStatusBar, QLabel, QFrame, QTabWidget)
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QShortcut, QKeySequence
 from pathlib import Path
 
 from ui.widgets.image_viewer import ImageViewer
@@ -179,6 +180,7 @@ class MainWindow(QMainWindow):
 
         ann_tab.setLayout(ann_layout)
         self.right_panel.addTab(ann_tab, "Annotations")
+        self._setup_panel_tab_shortcuts()
 
         # Training window (separate floating window)
         self.training_window = TrainingWindow(self)
@@ -366,6 +368,48 @@ class MainWindow(QMainWindow):
 
         help_menu = menubar.addMenu("Help")
         help_menu.addAction("About", self.show_about)
+
+    def _setup_panel_tab_shortcuts(self):
+        """Keyboard shortcuts for the Dataset / Annotations panel tabs.
+
+        Ctrl+Tab toggles between them; Ctrl+1 / Ctrl+2 jump straight to one.
+        They are application-wide so they work while the image canvas or
+        either list has focus.
+        """
+        shortcuts = Settings.SHORTCUTS
+
+        toggle = QShortcut(
+            QKeySequence(shortcuts.get('switch_panel_tab', 'Ctrl+Tab')), self)
+        toggle.activated.connect(self._toggle_panel_tab)
+
+        to_dataset = QShortcut(
+            QKeySequence(shortcuts.get('dataset_tab', 'Ctrl+1')), self)
+        to_dataset.activated.connect(lambda: self._show_panel_tab(0))
+
+        to_annotations = QShortcut(
+            QKeySequence(shortcuts.get('annotations_tab', 'Ctrl+2')), self)
+        to_annotations.activated.connect(lambda: self._show_panel_tab(1))
+
+        # Surface the shortcuts on the tabs themselves
+        self.right_panel.setTabToolTip(
+            0, f"Dataset  ({shortcuts.get('dataset_tab', 'Ctrl+1')})")
+        self.right_panel.setTabToolTip(
+            1, f"Annotations  ({shortcuts.get('annotations_tab', 'Ctrl+2')})")
+
+    def _toggle_panel_tab(self):
+        """Switch between the Dataset and Annotations tabs."""
+        self._show_panel_tab(1 - self.right_panel.currentIndex())
+
+    def _show_panel_tab(self, index: int):
+        """Show a panel tab and give its list focus, so the arrow keys
+        immediately move through whichever list just came forward."""
+        if not (0 <= index < self.right_panel.count()):
+            return
+        self.right_panel.setCurrentIndex(index)
+        if index == 0:
+            self.dataset_widget.image_list.setFocus()
+        else:
+            self.label_widget.annotation_list.setFocus()
 
     def _reset_project_state(self):
         """Clear all in-memory data and UI widgets so a project starts clean.

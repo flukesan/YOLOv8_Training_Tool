@@ -190,6 +190,9 @@ class Settings:
         'redo': 'Ctrl+Y',
         'start_training': 'F5',
         'stop_training': 'Shift+F5',
+        'switch_panel_tab': 'Ctrl+Tab',
+        'dataset_tab': 'Ctrl+1',
+        'annotations_tab': 'Ctrl+2',
     }
 
     # YOLO model variants
