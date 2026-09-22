@@ -248,6 +248,10 @@ class AutoAnnotateDialog(QDialog):
         self.ont_table.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.ont_table.verticalHeader().setVisible(False)
+        # Fixed row height matching ROW_WIDGET_HEIGHT (plus padding) so the
+        # fields and the Remove button share one baseline.
+        self.ont_table.verticalHeader().setDefaultSectionSize(
+            self.ROW_WIDGET_HEIGHT + 6)
         self.ont_table.setMinimumHeight(180)
         ont_layout.addWidget(self.ont_table)
         self._add_ontology_row()
@@ -394,26 +398,27 @@ class AutoAnnotateDialog(QDialog):
         return col
 
     # ------------------------------------------------------------- ontology
+    # Every widget in an ontology row uses this height so the text fields
+    # and the Remove button line up instead of sitting at different offsets.
+    ROW_WIDGET_HEIGHT = 28
+
     def _add_ontology_row(self, caption="", class_name=""):
         row = self.ont_table.rowCount()
         self.ont_table.insertRow(row)
 
         caption_edit = QLineEdit(caption)
         caption_edit.setPlaceholderText("e.g. iced coffee cup")
+        caption_edit.setMinimumHeight(self.ROW_WIDGET_HEIGHT)
         self.ont_table.setCellWidget(row, 0, caption_edit)
 
         class_edit = QLineEdit(class_name)
         class_edit.setPlaceholderText("e.g. cup")
+        class_edit.setMinimumHeight(self.ROW_WIDGET_HEIGHT)
         self.ont_table.setCellWidget(row, 1, class_edit)
 
         btn_del = QPushButton("Remove")
         btn_del.setToolTip("Remove this class")
-        btn_del.setStyleSheet(
-            "QPushButton { background-color: #c0392b; color: #ffffff; "
-            "border: none; border-radius: 4px; padding: 3px 6px; "
-            "font-size: 11px; }"
-            "QPushButton:hover { background-color: #d94435; }"
-        )
+        btn_del.setMinimumHeight(self.ROW_WIDGET_HEIGHT)
         btn_del.clicked.connect(lambda: self._remove_ontology_row(btn_del))
         self.ont_table.setCellWidget(row, 2, btn_del)
 
