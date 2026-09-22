@@ -25,3 +25,13 @@ roboflow>=1.1.0
 # "'BertModel' object has no attribute 'get_extended_attention_mask'".
 # Keep transformers on the 4.x line until GroundingDINO supports 5.x.
 transformers>=4.36,<5
+
+# NOTE: if the annotator fails with
+#   ImportError: cannot import name 'BertModel' from 'transformers'
+# check whether torchao got pulled in. transformers only guards its
+# torchao quantizer with is_torchao_available(), which tests that the
+# package exists - not that it imports - so a torchao built for a newer
+# torch (e.g. needing torch.utils._pytree.register_constant, added after
+# torch 2.6) takes the whole transformers import down with it. Nothing
+# here uses quantization, so simply remove it:
+#   pip uninstall -y torchao
